@@ -1,0 +1,16 @@
+services:
+  ytdownloader:
+    build: .
+    image: yt-downloader-web:latest
+    container_name: ytdownloader
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8088:8000"
+    environment:
+      MAX_CONCURRENT: "2"       # downloads running at the same time
+      JOB_TTL_MINUTES: "60"     # finished files are deleted after this
+      MAX_HEIGHT: "2160"        # cap resolution (e.g. 1080 to save disk/bandwidth)
+      AUTO_UPDATE: "1"          # update yt-dlp each time the container starts
+    volumes:
+      # Optional: put a YouTube cookies.txt here if you hit "Sign in to confirm you're not a bot"
+      - ./data:/data:ro
