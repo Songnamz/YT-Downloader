@@ -32,8 +32,8 @@ MAX_HEIGHT = int(os.environ.get("MAX_HEIGHT", "2160"))
 YT_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com",
             "music.youtube.com", "youtu.be", "www.youtube-nocookie.com"}
 QUALITIES = {"best": None, "2160": 2160, "1440": 1440, "1080": 1080,
-             "720": 720, "480": 480, "audio": "audio"}
-FORMATS = {"mp4", "mkv"}
+             "720": 720, "480": 480}
+FORMATS = {"mp4", "mkv", "mp3"}
 
 PROGRESS_TEMPLATE = (
     "download:[PROG]%(progress._percent_str)s|"
@@ -83,7 +83,7 @@ def build_command(url, quality, container, outdir, playlist) -> list[str]:
         "--yes-playlist" if playlist else "--no-playlist",
         "-P", str(outdir), "-o", template,
     ]
-    if quality == "audio":
+    if container == "mp3":
         cmd += ["-f", "ba/b", "-x", "--audio-format", "mp3", "--audio-quality", "0"]
     else:
         height = min(quality or MAX_HEIGHT, MAX_HEIGHT)
