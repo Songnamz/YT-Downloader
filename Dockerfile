@@ -16,11 +16,12 @@ ENV PATH="/opt/venv/bin:$PATH" \
 
 WORKDIR /app
 COPY requirements.txt .
+# Install as "app" so entrypoint.sh's yt-dlp auto-update can replace these files
+USER app
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app.py entrypoint.sh ./
 COPY static static
 
-USER app
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')"
