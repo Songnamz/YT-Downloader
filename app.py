@@ -18,7 +18,7 @@ import time
 import uuid
 import zipfile
 from pathlib import Path
-from urllib.parse import quote, urlsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
 from flask import Flask, abort, jsonify, redirect, request, send_file, send_from_directory
 
@@ -72,6 +72,21 @@ def clean_youtube_url(raw: str) -> str | None:
     if parts.hostname not in YT_HOSTS:
         return None
     return parts._replace(scheme="https").geturl()
+
+
+PLAYLIST_PARAMS = {"list", "index", "start_radio", "pp"}
+
+
+def strip_playlist(url: str) -> str | None:
+    """Drop playlist parameters so only the single video is fetched.
+    Returns None if nothing but a playlist is left (no single video to get)."""
+    parts = urlsplit(url)
+    query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
+             if k not in PLAYLIST_PARAMS]
+    if parts.path.lower().rstrip("/") == "/playlist" or (
+            parts.path.lower().rstrip("/") == "/watch" and not any(k == "v" for k, _ in query)):
+        return None
+    return parts._replace(query=urlencode(query)).geturl()
 
 
 def build_command(url, quality, container, outdir, playlist) -> list[str]:
@@ -276,7 +291,13 @@ def create_job():
         return jsonify(error="Please enter a YouTube link."), 400
     quality = QUALITIES.get(str(data.get("quality", "best")), None)
     container = data.get("format", "mp4") if data.get("format") in FORMATS else "mp4"
-    job = Job(url, quality, container, bool(data.get("playlist")))
+    playlist = data.get("playlist") is True
+    if not playlist:
+        url = strip_playlist(url)
+        if not url:
+            return jsonify(error="This link is a whole playlist. Turn on "
+                                 "\"Download whole playlist\" to get it as a .zip."), 400
+    job = Job(url, quality, container, playlist)
     with jobs_lock:
         jobs[job.id] = job
     threading.Thread(target=job.run, daemon=True).start()

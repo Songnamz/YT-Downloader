@@ -301,7 +301,9 @@ if (store.get("quality", "") === "audio") {
   format = "mp3"; quality.value = "best";
   store.set("format", format); store.set("quality", quality.value);
 }
-playlist.checked = store.get("playlist", "0") === "1";
+// The playlist switch is deliberately NOT remembered: it always starts off
+try { localStorage.removeItem("playlist"); } catch {}
+playlist.checked = false;
 function syncFormat() {
   document.querySelectorAll("#format button").forEach(b => {
     b.classList.toggle("on", b.dataset.v === format);
@@ -312,7 +314,6 @@ document.querySelectorAll("#format button").forEach(b => b.onclick = () => {
   format = b.dataset.v; store.set("format", format); syncFormat();
 });
 quality.onchange = () => { store.set("quality", quality.value); syncFormat(); };
-playlist.onchange = () => store.set("playlist", playlist.checked ? "1" : "0");
 syncFormat();
 
 // ---- shortcut help ------------------------------------------------------
@@ -362,13 +363,11 @@ async function start(url) {
   $("file").textContent = url;
   bar.classList.add("indet"); bar.firstElementChild.style.width = "";
   setStatus("Starting…");
-  // A playlist page (no v=) is clearly a playlist; a watch?v=…&list= link follows the switch
-  const isPlaylistPage = /[?&]list=/.test(url) && !/[?&]v=/.test(url);
   try {
     const r = await fetch("/api/jobs", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url, quality: quality.value, format,
-                             playlist: playlist.checked || isPlaylistPage }),
+                             playlist: playlist.checked }),
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || "Request failed");
