@@ -73,6 +73,7 @@ python app.py            # http://localhost:8000
 | `JOB_TTL_MINUTES` | 60 | finished files are deleted after this |
 | `MAX_HEIGHT` | 2160 | resolution cap |
 | `CONCURRENT_FRAGMENTS` | 8 | parallel connections per download (1 = off) |
+| `PLAYLIST_PARALLEL` | 3 | playlist videos downloaded at the same time |
 | `AUTO_UPDATE` | 1 | update yt-dlp on container start |
 
 ### "Sign in to confirm you're not a bot"

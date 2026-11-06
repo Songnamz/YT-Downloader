@@ -17,6 +17,7 @@ import threading
 import time
 import uuid
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
@@ -30,6 +31,8 @@ JOB_TTL = int(os.environ.get("JOB_TTL_MINUTES", "60")) * 60
 MAX_HEIGHT = int(os.environ.get("MAX_HEIGHT", "2160"))
 # Parallel fragment downloads (HLS/DASH). Same file, same quality, just faster.
 FRAGMENTS = max(1, int(os.environ.get("CONCURRENT_FRAGMENTS", "8")))
+# Playlist videos downloaded at the same time (per playlist job)
+PLAYLIST_PARALLEL = max(1, int(os.environ.get("PLAYLIST_PARALLEL", "3")))
 
 YT_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com",
             "music.youtube.com", "youtu.be", "www.youtube-nocookie.com"}
@@ -44,7 +47,8 @@ PROGRESS_TEMPLATE = (
 PROGRESS_RE = re.compile(r"\[PROG\]\s*([\d.]+)%\|\s*(.*?)\s*\|\s*(.*)")
 DEST_RE = re.compile(r"^\[download\] Destination: (.+)$")
 MERGE_RE = re.compile(r'^\[Merger\] Merging formats into "(.+)"$')
-ITEM_RE = re.compile(r"^\[download\] Downloading item (\d+) of (\d+)")
+SPEED_RE = re.compile(r"([\d.]+)\s*([KMGT]?i?B)/s")
+UNITS = {"B": 1, "KiB": 1024, "MiB": 1024**2, "GiB": 1024**3, "TiB": 1024**4}
 
 # "/https://www.youtube.com/watch?v=..." (slashes may be collapsed by proxies)
 PREFIX_RE = re.compile(
@@ -91,13 +95,34 @@ def strip_playlist(url: str) -> str | None:
     return parts._replace(query=urlencode(query)).geturl()
 
 
-def build_command(url, quality, container, outdir, playlist) -> list[str]:
-    template = ("%(playlist_index)03d - %(title)s.%(ext)s" if playlist
-                else "%(title)s [%(id)s].%(ext)s")
+def parse_speed(text: str) -> float:
+    """'  5.00MiB/s' -> bytes per second (0 if unknown)."""
+    m = SPEED_RE.search(text or "")
+    return float(m.group(1)) * UNITS.get(m.group(2), 0) if m else 0.0
+
+
+def format_speed(bps: float) -> str:
+    for unit in ("B", "KiB", "MiB", "GiB"):
+        if bps < 1024 or unit == "GiB":
+            return f"{bps:.2f}{unit}/s"
+        bps /= 1024
+    return ""
+
+
+def cookie_args(dest: Path) -> list[str]:
+    if COOKIES and os.path.isfile(COOKIES):
+        # Copy so yt-dlp's cookie writes never touch the mounted original
+        shutil.copyfile(COOKIES, dest)
+        return ["--cookies", str(dest)]
+    return []
+
+
+def build_command(url, quality, container, outdir, template, cookies) -> list[str]:
+    """yt-dlp command for one single video."""
     cmd = [
         "yt-dlp", "--newline", "--color", "never",
         "--progress-template", PROGRESS_TEMPLATE,
-        "--yes-playlist" if playlist else "--no-playlist",
+        "--no-playlist",
         "--concurrent-fragments", str(FRAGMENTS),
         "-P", str(outdir), "-o", template,
     ]
@@ -109,12 +134,7 @@ def build_command(url, quality, container, outdir, playlist) -> list[str]:
         if container == "mp4":
             sort += ",ext:mp4:m4a"
         cmd += ["-f", "bv*+ba/b", "-S", sort, "--merge-output-format", container]
-    if COOKIES and os.path.isfile(COOKIES):
-        # Copy so yt-dlp's cookie writes never touch the mounted original
-        cookie_copy = Path(outdir).parent / "cookies.txt"
-        shutil.copyfile(COOKIES, cookie_copy)
-        cmd += ["--cookies", str(cookie_copy)]
-    cmd += ["--", url]
+    cmd += cookies + ["--", url]
     return cmd
 
 
@@ -131,7 +151,8 @@ class Job:
         self.dir = JOBS_DIR / self.id
         self.out = self.dir / "out"
         self.created = time.time()
-        self.proc: subprocess.Popen | None = None
+        self.procs: set[subprocess.Popen] = set()
+        self.lock = threading.Lock()
         self.cancelled = False
         self.state = {
             "status": "queued",   # queued|running|processing|done|error|cancelled
@@ -145,7 +166,8 @@ class Job:
         self.state.update(kw)
 
     def log(self, line):
-        self.state["log"] = (self.state["log"] + [line])[-60:]
+        with self.lock:
+            self.state["log"] = (self.state["log"] + [line])[-60:]
 
     def public(self):
         s = dict(self.state)
@@ -153,35 +175,42 @@ class Job:
         s["download_name"] = self.result.name if self.result else ""
         return s
 
-    def run(self):
-        self.out.mkdir(parents=True, exist_ok=True)
-        with slots:
-            if self.cancelled:
-                return
-            self.update(status="running", stage="Fetching video info…")
-            cmd = build_command(self.url, self.quality, self.container,
-                                self.out, self.playlist)
-            env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
-            try:
-                self.proc = subprocess.Popen(
-                    cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    text=True, encoding="utf-8", errors="replace", bufsize=1,
-                    env=env, start_new_session=True)
-            except OSError as exc:
-                self.update(status="error", error=f"Failed to start yt-dlp: {exc}")
-                return
-            last_error = ""
-            for line in self.proc.stdout:
-                line = line.rstrip()
-                if not line:
-                    continue
-                if m := PROGRESS_RE.search(line):
-                    self.update(status="running", stage="Downloading on server…",
-                                percent=float(m.group(1)), speed=m.group(2), eta=m.group(3))
-                    continue
-                if line.startswith("[PROG]"):
-                    continue
-                self.log(line)
+    # -- process handling ---------------------------------------------------
+    def spawn(self, cmd) -> subprocess.Popen:
+        env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace", bufsize=1,
+            env=env, start_new_session=True)
+        with self.lock:
+            self.procs.add(proc)
+        if self.cancelled:       # cancel() ran while we were starting it
+            kill(proc)
+        return proc
+
+    def reap(self, proc) -> int:
+        code = proc.wait()
+        with self.lock:
+            self.procs.discard(proc)
+        return code
+
+    def run_ytdlp(self, cmd, on_progress, tag=""):
+        """Run one yt-dlp process; returns (exit code, last error line)."""
+        proc = self.spawn(cmd)
+        last_error = ""
+        for line in proc.stdout:
+            line = line.rstrip()
+            if not line:
+                continue
+            if m := PROGRESS_RE.search(line):
+                on_progress(float(m.group(1)), m.group(2), m.group(3))
+                continue
+            if line.startswith("[PROG]"):
+                continue
+            self.log(tag + line)
+            if line.startswith("ERROR:"):
+                last_error = line[6:].strip()
+            elif not self.playlist:
                 if m := DEST_RE.match(line):
                     self.update(file=Path(m.group(1)).name, status="running",
                                 stage="Downloading on server…")
@@ -190,12 +219,93 @@ class Job:
                                 file=Path(m.group(1)).name)
                 elif line.startswith("[ExtractAudio]"):
                     self.update(status="processing", stage="Converting to MP3…")
-                elif m := ITEM_RE.match(line):
-                    self.update(item=f"{m.group(1)} of {m.group(2)}")
-                elif line.startswith("ERROR:"):
-                    last_error = line[6:].strip()
-            code = self.proc.wait()
-            self.proc = None
+        return self.reap(proc), last_error
+
+    # -- single video -------------------------------------------------------
+    def run_single(self):
+        def progress(pct, speed, eta):
+            self.update(status="running", stage="Downloading on server…",
+                        percent=pct, speed=speed, eta=eta)
+        cmd = build_command(self.url, self.quality, self.container, self.out,
+                            "%(title)s [%(id)s].%(ext)s",
+                            cookie_args(self.dir / "cookies.txt"))
+        return self.run_ytdlp(cmd, progress)
+
+    # -- playlist: list the videos, then fetch several at once --------------
+    def list_playlist(self):
+        cmd = ["yt-dlp", "--flat-playlist", "--yes-playlist", "--no-warnings",
+               "--color", "never", "--print", "%(id)s",
+               *cookie_args(self.dir / "cookies.txt"), "--", self.url]
+        proc = self.spawn(cmd)
+        ids, last_error = [], ""
+        for line in proc.stdout:
+            line = line.strip()
+            if line.startswith("ERROR:"):
+                last_error = line[6:].strip()
+                self.log(line)
+            elif re.fullmatch(r"[\w-]{11}", line):
+                ids.append(line)
+        return ids, self.reap(proc), last_error
+
+    def run_playlist(self):
+        self.update(stage="Reading playlist…")
+        ids, code, err = self.list_playlist()
+        if self.cancelled or not ids:
+            return (code or 1), err or "No videos found in this playlist."
+        total = len(ids)
+        width = max(3, len(str(total)))
+        pct = {}      # index -> percent of that video
+        speed = {}    # index -> bytes/s of that video
+        done, failed, errors = [0], [0], []
+
+        def refresh():
+            with self.lock:
+                overall = sum(pct.values()) / total
+                bps = sum(speed.values())
+            self.update(status="running", stage="Downloading on server…",
+                        percent=overall, speed=format_speed(bps) if bps else "",
+                        eta="", item=f"{done[0]} of {total} done")
+
+        def fetch(job):
+            index, vid = job
+            if self.cancelled:
+                return
+            def progress(p, sp, _eta):
+                with self.lock:
+                    pct[index], speed[index] = p, parse_speed(sp)
+                refresh()
+            cmd = build_command(
+                f"https://www.youtube.com/watch?v={vid}", self.quality, self.container,
+                self.out, f"{index:0{width}d} - %(title)s.%(ext)s",
+                cookie_args(self.dir / f"cookies-{index}.txt"))
+            code, err = self.run_ytdlp(cmd, progress, tag=f"[{index}] ")
+            with self.lock:
+                pct[index], speed[index] = 100.0, 0.0
+                done[0] += 1
+                if code != 0:
+                    failed[0] += 1
+                    errors.append(err or f"yt-dlp exited with code {code}")
+            refresh()
+
+        refresh()
+        with ThreadPoolExecutor(PLAYLIST_PARALLEL) as pool:
+            list(pool.map(fetch, enumerate(ids, start=1)))
+        if not failed[0]:
+            return 0, ""
+        return 1, f"{failed[0]} of {total} videos failed: {errors[-1]}"
+
+    def run(self):
+        self.out.mkdir(parents=True, exist_ok=True)
+        with slots:
+            if self.cancelled:
+                return
+            self.update(status="running", stage="Fetching video info…")
+            try:
+                code, last_error = (self.run_playlist() if self.playlist
+                                    else self.run_single())
+            except OSError as exc:
+                self.update(status="error", error=f"Failed to start yt-dlp: {exc}")
+                return
 
         if self.cancelled:
             self.update(status="cancelled", stage="Cancelled")
@@ -220,14 +330,20 @@ class Job:
 
     def cancel(self):
         self.cancelled = True
-        proc = self.proc
-        if proc and proc.poll() is None:
-            try:
-                os.killpg(proc.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
+        with self.lock:
+            procs = list(self.procs)
+        for proc in procs:
+            kill(proc)
         if self.state["status"] == "queued":
             self.update(status="cancelled", stage="Cancelled")
+
+
+def kill(proc):
+    if proc.poll() is None:
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
 
 
 def janitor():

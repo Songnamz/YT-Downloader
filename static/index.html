@@ -396,7 +396,7 @@ async function poll() {
     bar.firstElementChild.style.width = s.percent + "%";
     $("pct").textContent = Math.floor(s.percent) + "%";
     $("speed").textContent = [s.speed, s.eta && s.eta + " remaining"].filter(Boolean).join("   •   ");
-    setStatus(s.item ? `Downloading item ${s.item}…` : s.stage);
+    setStatus(s.item ? `Downloading playlist (${s.item})…` : s.stage);
   } else if (s.status === "queued" || s.status === "processing" || s.status === "running") {
     $("pct").textContent = ""; $("speed").textContent = ""; setStatus(s.stage);
   }
