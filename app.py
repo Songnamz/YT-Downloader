@@ -28,6 +28,8 @@ COOKIES = os.environ.get("COOKIES_FILE", "/data/cookies.txt")
 MAX_CONCURRENT = int(os.environ.get("MAX_CONCURRENT", "2"))
 JOB_TTL = int(os.environ.get("JOB_TTL_MINUTES", "60")) * 60
 MAX_HEIGHT = int(os.environ.get("MAX_HEIGHT", "2160"))
+# Parallel fragment downloads (HLS/DASH). Same file, same quality, just faster.
+FRAGMENTS = max(1, int(os.environ.get("CONCURRENT_FRAGMENTS", "8")))
 
 YT_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com",
             "music.youtube.com", "youtu.be", "www.youtube-nocookie.com"}
@@ -96,6 +98,7 @@ def build_command(url, quality, container, outdir, playlist) -> list[str]:
         "yt-dlp", "--newline", "--color", "never",
         "--progress-template", PROGRESS_TEMPLATE,
         "--yes-playlist" if playlist else "--no-playlist",
+        "--concurrent-fragments", str(FRAGMENTS),
         "-P", str(outdir), "-o", template,
     ]
     if container == "mp3":
