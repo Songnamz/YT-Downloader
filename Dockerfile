@@ -23,6 +23,6 @@ COPY app.py entrypoint.sh ./
 COPY static static
 
 EXPOSE 8000
-HEALTHCHECK --interval=30s --timeout=5s --start-period=60s \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')"
 ENTRYPOINT ["sh", "/app/entrypoint.sh"]

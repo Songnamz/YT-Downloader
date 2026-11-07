@@ -383,10 +383,17 @@ async function poll() {
   let s;
   try {
     const r = await fetch(`/api/jobs/${job}`);
-    if (!r.ok) throw new Error("Job not found (server restarted?)");
+    if (r.status === 404) {
+      // The server forgot this job (restart or cleanup): retrying won't help
+      finish(); bar.firstElementChild.style.width = "0";
+      setStatus("Download failed", "err");
+      $("file").textContent = "The server restarted and lost this download. Please try again.";
+      return;
+    }
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
     s = await r.json();
   } catch {
-    timer = setTimeout(poll, 2000); return;
+    timer = setTimeout(poll, 2000); return;   // network blip: keep trying
   }
   $("log").textContent = s.log.join("\n");
   if (s.file) $("file").textContent = s.file;

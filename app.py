@@ -151,6 +151,7 @@ class Job:
         self.dir = JOBS_DIR / self.id
         self.out = self.dir / "out"
         self.created = time.time()
+        self.finished: float | None = None   # set when the job stops for any reason
         self.procs: set[subprocess.Popen] = set()
         self.lock = threading.Lock()
         self.cancelled = False
@@ -295,6 +296,14 @@ class Job:
         return 1, f"{failed[0]} of {total} videos failed: {errors[-1]}"
 
     def run(self):
+        try:
+            self._run()
+        except Exception as exc:  # noqa: BLE001 - never leave a job stuck "running"
+            self.update(status="error", stage="Download failed", error=str(exc))
+        finally:
+            self.finished = time.time()
+
+    def _run(self):
         self.out.mkdir(parents=True, exist_ok=True)
         with slots:
             if self.cancelled:
@@ -324,6 +333,7 @@ class Job:
             with zipfile.ZipFile(self.result, "w", zipfile.ZIP_STORED) as zf:
                 for f in files:
                     zf.write(f, f.relative_to(self.out))
+                    f.unlink()   # keep only one copy on disk
         self.update(status="done", stage="Ready", percent=100, speed="", eta="",
                     file=self.result.name,
                     error=last_error if code != 0 else "")
@@ -347,12 +357,14 @@ def kill(proc):
 
 
 def janitor():
-    """Delete finished jobs (and their files) after JOB_TTL seconds."""
+    """Delete jobs (and their files) JOB_TTL seconds after they finish.
+    Running and queued jobs are never touched, however long they take."""
     while True:
         time.sleep(60)
         cutoff = time.time() - JOB_TTL
         with jobs_lock:
-            old = [j for j in jobs.values() if j.created < cutoff]
+            old = [j for j in jobs.values()
+                   if j.finished is not None and j.finished < cutoff]
             for j in old:
                 jobs.pop(j.id, None)
         for j in old:
@@ -460,5 +472,8 @@ def version():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "8000")), debug=True,
-            threaded=True)
+    # Local development only (Docker runs gunicorn). Listens on localhost by
+    # default; the Werkzeug debugger allows running code, so it is opt-in.
+    app.run(host=os.environ.get("HOST", "127.0.0.1"),
+            port=int(os.environ.get("PORT", "8000")),
+            debug=os.environ.get("FLASK_DEBUG") == "1", threaded=True)
