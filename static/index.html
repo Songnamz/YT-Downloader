@@ -131,6 +131,17 @@
   .switch input:checked { background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
   .switch input:checked::before { transform: translateX(18px); }
   .switch input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .tabs { margin: -4px 0 18px; }
+  .tabs button { height: 38px; font-size: 14px; gap: 8px; }
+  .tabs button svg { width: 16px; height: 16px; flex: none; }
+  .tabs button.on svg { color: var(--accent); }
+  [data-site="yt"] .any-only, [data-site="any"] .yt-only { display: none !important; }
+  .sites { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+  .sites span {
+    font-size: 12px; padding: 2px 10px; border-radius: 999px; background: var(--code);
+    border: 1px solid var(--border); color: var(--text);
+  }
+  .tips a.link { color: var(--accent); }
   #theme.seg { border-radius: 999px; }
   #theme.seg button { height: 28px; font-size: 12px; padding: 0 12px; border-radius: 999px; }
 
@@ -180,6 +191,8 @@
     margin-left: 4px; background: color-mix(in srgb, var(--accent) 8%, transparent);
   }
   .bm:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+  footer a { color: inherit; }
+  footer a:hover { color: var(--text); }
   footer { display: flex; justify-content: center; color: var(--muted); font-size: 12px; margin-top: 16px; gap: 8px; flex-wrap: wrap; }
 
   @media (max-width: 860px) {
@@ -219,7 +232,11 @@
   <div class="layout">
   <div class="col">
   <form class="card" id="form">
-    <label class="h" for="url">Video or playlist URL</label>
+    <div class="seg tabs" id="site" role="tablist" aria-label="Where the video is from">
+      <button type="button" role="tab" data-v="yt"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M23 7.2a3 3 0 0 0-2.1-2.1C19 4.6 12 4.6 12 4.6s-7 0-8.9.5A3 3 0 0 0 1 7.2 31 31 0 0 0 .5 12a31 31 0 0 0 .5 4.8 3 3 0 0 0 2.1 2.1c1.9.5 8.9.5 8.9.5s7 0 8.9-.5a3 3 0 0 0 2.1-2.1 31 31 0 0 0 .5-4.8 31 31 0 0 0-.5-4.8zM9.8 15V9l5.8 3-5.8 3z"/></svg>YouTube</button>
+      <button type="button" role="tab" data-v="any"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/></svg>Other sites</button>
+    </div>
+    <label class="h" for="url" id="urlLabel">Video or playlist URL</label>
     <div class="row">
       <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5"/></svg>
       <input type="url" id="url" placeholder="https://www.youtube.com/watch?v=…" autocomplete="off" required>
@@ -262,17 +279,30 @@
 
   </div>
 
-  <div class="card tips">
+  <div class="card tips yt-only">
     <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>Shortcut from YouTube</h2>
     <p>While watching a video, click the address bar, put the cursor at the very start and type
       <code><b id="host">this-site</b>/</code> in front of the link, then press Enter:</p>
     <p><code><b class="hostc">this-site</b>/https://www.youtube.com/watch?v=6QZVNjpkyLY</code></p>
     <p>Or drag this button to your bookmarks bar and click it on any YouTube page:
-      <a class="btn bm" id="bookmarklet" href="#" title="Drag me to your bookmarks bar">⬇ YT Download</a></p>
+      <a class="btn bm" href="#" title="Drag me to your bookmarks bar">⬇ YT Download</a></p>
+  </div>
+
+  <div class="card tips any-only">
+    <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/></svg>Download from other sites</h2>
+    <p>Paste the link of the page the video is on. More than 1,800 sites work, for example:</p>
+    <div class="sites"><span>X / Twitter</span><span>TikTok</span><span>Facebook</span><span>Instagram</span><span>Reddit</span><span>Dailymotion</span><span>Twitch</span><span>Bilibili</span><span>SoundCloud</span></div>
+    <p>Many other pages with a video player work too, as do direct <code>.mp4</code> / <code>.m3u8</code> links.
+      <a class="link" href="https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md" target="_blank" rel="noopener">Full list of sites</a></p>
+    <p>Shortcut: type <code><b class="hostc">this-site</b>/</code> in front of the page address, including the <code>https://</code>:</p>
+    <p><code><b class="hostc">this-site</b>/https://www.dailymotion.com/video/x8j6s5k</code></p>
+    <p>Or drag this button to your bookmarks bar and click it on the page with the video:
+      <a class="btn bm" href="#" title="Drag me to your bookmarks bar">⬇ Download video</a></p>
+    <p>Videos behind a login, or protected with DRM (Netflix, Disney+, Spotify and similar), can't be downloaded.</p>
   </div>
   </div>
 
-  <footer><span>© <span id="year"></span> ทรงนำ สารภัย</span></footer>
+  <footer><span>© <span id="year"></span> ทรงนำ สารภัย</span><span id="logoutSep" hidden>·</span><a id="logout" href="/logout" hidden>Log out</a></footer>
 </main>
 
 <script>
@@ -320,9 +350,42 @@ syncFormat();
 const host = location.host;
 $("host").textContent = host;
 document.querySelectorAll(".hostc").forEach(e => e.textContent = host);
-$("bookmarklet").href =
-  `javascript:location.href='${location.origin}/?auto=1&url='+encodeURIComponent(location.href)`;
-$("bookmarklet").onclick = (e) => { e.preventDefault(); alert("Drag this button to your bookmarks bar."); };
+document.querySelectorAll(".bm").forEach(b => {
+  b.href = `javascript:location.href='${location.origin}/?auto=1&url='+encodeURIComponent(location.href)`;
+  b.onclick = (e) => { e.preventDefault(); alert("Drag this button to your bookmarks bar."); };
+});
+
+// ---- menu: YouTube / Other sites ---------------------------------------
+const YT_HOSTS = ["youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com",
+                  "youtu.be", "www.youtube-nocookie.com"];
+let site = "yt";
+function isYouTube(u) {
+  try { return YT_HOSTS.includes(new URL(u.startsWith("http") ? u : "https://" + u).hostname); }
+  catch { return true; }
+}
+function setSite(v) {
+  site = v;
+  document.body.dataset.site = v;
+  document.querySelectorAll("#site button").forEach(b => {
+    b.classList.toggle("on", b.dataset.v === v);
+    b.setAttribute("aria-selected", b.dataset.v === v);
+  });
+  $("urlLabel").textContent = v === "yt" ? "Video or playlist URL" : "Link to the page with the video";
+  $("url").placeholder = v === "yt" ? "https://www.youtube.com/watch?v=…" : "https://www.dailymotion.com/video/…";
+  store.set("site", v);
+}
+document.querySelectorAll("#site button").forEach(b => b.onclick = () => { setSite(b.dataset.v); $("url").focus(); });
+setSite(store.get("site", "yt"));
+// Hide the menu if the server only allows YouTube
+// Logged out (login expired or password changed): go to the login page
+function toLogin() { location.href = "/login"; }
+fetch("/api/config").then(r => {
+  if (r.status === 401) return toLogin();
+  return r.json().then(c => {
+    if (!c.any_site) { $("site").style.display = "none"; setSite("yt"); }
+    if (c.login) { $("logout").hidden = false; $("logoutSep").hidden = false; }
+  });
+}).catch(() => {});
 $("year").textContent = new Date().getFullYear();
 
 // ---- download flow ------------------------------------------------------
@@ -355,7 +418,9 @@ async function start(url) {
   if (job) return;
   url = url.trim();
   if (!url) return;
-  const id = videoId(url);
+  const yt = isYouTube(url);
+  if ((site === "yt") !== yt && $("site").style.display !== "none") setSite(yt ? "yt" : "any");
+  const id = yt ? videoId(url) : null;
   $("thumb").classList.toggle("show", !!id);
   if (id) $("thumb").style.backgroundImage = `url(https://i.ytimg.com/vi/${id}/mqdefault.jpg)`;
   $("save").style.display = "none";
@@ -369,6 +434,7 @@ async function start(url) {
       body: JSON.stringify({ url, quality: quality.value, format,
                              playlist: playlist.checked }),
     });
+    if (r.status === 401) return toLogin();
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || "Request failed");
     job = d.id; setBusy(true); poll();
@@ -383,6 +449,7 @@ async function poll() {
   let s;
   try {
     const r = await fetch(`/api/jobs/${job}`);
+    if (r.status === 401) return toLogin();
     if (r.status === 404) {
       // The server forgot this job (restart or cleanup): retrying won't help
       finish(); bar.firstElementChild.style.width = "0";

@@ -6,12 +6,18 @@ for progress, then fetches the finished file (or a zip for playlists).
 "yt prefix" shortcuts - any of these open the app and start downloading:
   https://<this-host>/https://www.youtube.com/watch?v=ID   (prepend host)
   https://<this-host>/watch?v=ID                            (YouTube-shaped path)
+  https://<this-host>/https://www.dailymotion.com/video/ID  (any site yt-dlp supports)
 """
 
+import hashlib
+import hmac
+import ipaddress
+import secrets
 import os
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import threading
 import time
@@ -21,7 +27,10 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
-from flask import Flask, abort, jsonify, redirect, request, send_file, send_from_directory
+from datetime import timedelta
+
+from flask import (Flask, abort, jsonify, redirect, request, send_file,
+                   send_from_directory, session)
 
 BASE = Path(__file__).resolve().parent
 JOBS_DIR = Path(os.environ.get("JOBS_DIR", BASE / "jobs"))
@@ -33,6 +42,13 @@ MAX_HEIGHT = int(os.environ.get("MAX_HEIGHT", "2160"))
 FRAGMENTS = max(1, int(os.environ.get("CONCURRENT_FRAGMENTS", "8")))
 # Playlist videos downloaded at the same time (per playlist job)
 PLAYLIST_PARALLEL = max(1, int(os.environ.get("PLAYLIST_PARALLEL", "3")))
+# Allow links from any site yt-dlp supports, not only YouTube
+ANY_SITE = os.environ.get("ALLOW_ANY_SITE", "1") == "1"
+# Login: empty password = no login page (e.g. local development)
+PASSWORD = os.environ.get("APP_PASSWORD", "")
+LOGIN_DAYS = int(os.environ.get("LOGIN_DAYS", "30"))
+MAX_FAILS = 5                 # wrong passwords allowed per IP...
+FAIL_WINDOW = 15 * 60         # ...within this many seconds
 
 YT_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com",
             "music.youtube.com", "youtu.be", "www.youtube-nocookie.com"}
@@ -55,9 +71,16 @@ PREFIX_RE = re.compile(
     r"^/(?:https?:/+)?((?:www\.|m\.|music\.)?youtube\.com|youtu\.be)(/.*)?$", re.I)
 # YouTube-shaped paths, for a host like "ytyoutube.<tld>" pointed at this app
 YT_PATH_RE = re.compile(r"^/(watch|playlist|shorts/|live/|embed/|v/)", re.I)
+# "/https://any.site/path" - other sites need the scheme, so app paths like
+# /favicon.ico are never mistaken for a link
+ANY_PREFIX_RE = re.compile(r"^/(https?):/+([^/?#]+\.[^/?#]+)(/.*)?$", re.I)
 
 app = Flask(__name__, static_folder=None)
 app.url_map.merge_slashes = False
+# Without a fixed SECRET_KEY every restart logs everyone out
+app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
+                  PERMANENT_SESSION_LIFETIME=timedelta(days=LOGIN_DAYS))
 
 jobs: dict[str, "Job"] = {}
 jobs_lock = threading.Lock()
@@ -67,17 +90,39 @@ slots = threading.Semaphore(MAX_CONCURRENT)
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
-def clean_youtube_url(raw: str) -> str | None:
-    """Return a normalised https YouTube URL, or None if it isn't one."""
+def clean_url(raw: str) -> str | None:
+    """Return a normalised http(s) URL (https for YouTube), or None."""
     raw = (raw or "").strip()
     if not raw:
         return None
     if not re.match(r"^https?://", raw, re.I):
         raw = "https://" + raw
-    parts = urlsplit(raw)
-    if parts.hostname not in YT_HOSTS:
+    try:
+        parts = urlsplit(raw)
+        parts.port  # noqa: B018 - raises on a bad port
+    except ValueError:
         return None
-    return parts._replace(scheme="https").geturl()
+    host = parts.hostname or ""
+    if "." not in host and ":" not in host:    # needs a real domain or IP
+        return None
+    if is_youtube(raw):
+        parts = parts._replace(scheme="https")
+    return parts.geturl()
+
+
+def is_youtube(url: str) -> bool:
+    return urlsplit(url).hostname in YT_HOSTS
+
+
+def is_public_host(host: str) -> bool:
+    """True if every address the host resolves to is on the public internet.
+    Stops the server being used to reach localhost, the LAN or cloud metadata."""
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except (socket.gaierror, UnicodeError):
+        return False
+    return bool(infos) and all(
+        ipaddress.ip_address(info[4][0].split("%")[0]).is_global for info in infos)
 
 
 PLAYLIST_PARAMS = {"list", "index", "start_radio", "pp"}
@@ -234,26 +279,35 @@ class Job:
 
     # -- playlist: list the videos, then fetch several at once --------------
     def list_playlist(self):
+        """Return (entry URLs, is a single video, exit code, last error)."""
         cmd = ["yt-dlp", "--flat-playlist", "--yes-playlist", "--no-warnings",
-               "--color", "never", "--print", "%(id)s",
+               "--color", "never", "--print", "%(_type)s\t%(url)s",
                *cookie_args(self.dir / "cookies.txt"), "--", self.url]
         proc = self.spawn(cmd)
-        ids, last_error = [], ""
+        urls, single, last_error = [], False, ""
         for line in proc.stdout:
             line = line.strip()
             if line.startswith("ERROR:"):
                 last_error = line[6:].strip()
                 self.log(line)
-            elif re.fullmatch(r"[\w-]{11}", line):
-                ids.append(line)
-        return ids, self.reap(proc), last_error
+            elif "\t" in line:
+                kind, url = line.split("\t", 1)
+                if kind.startswith("url") and url.startswith(("http://", "https://")):
+                    urls.append(url)
+                elif kind in ("video", "NA"):
+                    single = True    # the link is one video, not a playlist
+        return urls, single, self.reap(proc), last_error
 
     def run_playlist(self):
         self.update(stage="Reading playlist…")
-        ids, code, err = self.list_playlist()
-        if self.cancelled or not ids:
+        urls, single, code, err = self.list_playlist()
+        if not self.cancelled and not urls and single:
+            # Not a playlist after all: just download the one video
+            self.playlist = False
+            return self.run_single()
+        if self.cancelled or not urls:
             return (code or 1), err or "No videos found in this playlist."
-        total = len(ids)
+        total = len(urls)
         width = max(3, len(str(total)))
         pct = {}      # index -> percent of that video
         speed = {}    # index -> bytes/s of that video
@@ -268,7 +322,7 @@ class Job:
                         eta="", item=f"{done[0]} of {total} done")
 
         def fetch(job):
-            index, vid = job
+            index, url = job
             if self.cancelled:
                 return
             def progress(p, sp, _eta):
@@ -276,7 +330,7 @@ class Job:
                     pct[index], speed[index] = p, parse_speed(sp)
                 refresh()
             cmd = build_command(
-                f"https://www.youtube.com/watch?v={vid}", self.quality, self.container,
+                url, self.quality, self.container,
                 self.out, f"{index:0{width}d} - %(title)s.%(ext)s",
                 cookie_args(self.dir / f"cookies-{index}.txt"))
             code, err = self.run_ytdlp(cmd, progress, tag=f"[{index}] ")
@@ -290,7 +344,7 @@ class Job:
 
         refresh()
         with ThreadPoolExecutor(PLAYLIST_PARALLEL) as pool:
-            list(pool.map(fetch, enumerate(ids, start=1)))
+            list(pool.map(fetch, enumerate(urls, start=1)))
         if not failed[0]:
             return 0, ""
         return 1, f"{failed[0]} of {total} videos failed: {errors[-1]}"
@@ -383,15 +437,103 @@ threading.Thread(target=janitor, daemon=True).start()
 # --------------------------------------------------------------------------- #
 # Routes
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# Login
+# --------------------------------------------------------------------------- #
+OPEN_PATHS = {"/login", "/logout", "/healthz"}
+fails: dict[str, list[float]] = {}     # ip -> times of recent wrong passwords
+fails_lock = threading.Lock()
+
+
+def password_tag() -> str:
+    """Stored in the session; changing APP_PASSWORD logs everyone out."""
+    return hmac.new(app.secret_key.encode(), PASSWORD.encode(), hashlib.sha256).hexdigest()[:32]
+
+
+def logged_in() -> bool:
+    return not PASSWORD or hmac.compare_digest(session.get("auth", ""), password_tag())
+
+
+def client_ip() -> str:
+    # Behind Cloudflare Tunnel the app is only reachable through cloudflared
+    return (request.headers.get("CF-Connecting-IP")
+            or request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+            or request.remote_addr or "?")
+
+
+def recent_fails(ip) -> list[float]:
+    cutoff = time.time() - FAIL_WINDOW
+    with fails_lock:
+        fails[ip] = [t for t in fails.get(ip, []) if t > cutoff]
+        if not fails[ip]:
+            del fails[ip]
+            return []
+        return fails[ip]
+
+
+def safe_next(target) -> str:
+    """Only allow redirects back into this site."""
+    target = target or "/"
+    if not target.startswith("/") or target.startswith("//") or "\\" in target:
+        return "/"
+    return target
+
+
+@app.before_request
+def require_login():
+    if logged_in() or request.path in OPEN_PATHS:
+        return None
+    if request.path.startswith("/api/"):
+        return jsonify(error="Please log in again."), 401
+    raw = request.environ.get("RAW_URI") or request.environ.get("REQUEST_URI") or request.full_path
+    return redirect("/login?" + urlencode({"next": raw}), 302)
+
+
+@app.get("/login")
+def login_page():
+    if PASSWORD and logged_in():
+        return redirect(safe_next(request.args.get("next")))
+    return send_from_directory(BASE / "static", "login.html")
+
+
+@app.post("/login")
+def login():
+    ip, nxt = client_ip(), safe_next(request.form.get("next"))
+    if len(recent_fails(ip)) >= MAX_FAILS:
+        return redirect("/login?" + urlencode({"e": "locked", "next": nxt}), 303)
+    if hmac.compare_digest(request.form.get("password", "").encode(), PASSWORD.encode()):
+        with fails_lock:
+            fails.pop(ip, None)
+        session.clear()
+        session.permanent = True
+        session["auth"] = password_tag()
+        return redirect(nxt, 303)
+    with fails_lock:
+        fails.setdefault(ip, []).append(time.time())
+    time.sleep(1)   # slow down guessing
+    return redirect("/login?" + urlencode({"e": "wrong", "next": nxt}), 303)
+
+
+@app.get("/logout")
+def logout():
+    session.clear()
+    return redirect("/login" if PASSWORD else "/", 302)
+
+
 @app.before_request
 def youtube_shortcuts():
     """Turn /https://youtube.com/watch?v=… or /watch?v=… into an auto-download."""
-    path, qs = request.path, request.query_string.decode()
+    qs = request.query_string.decode()
+    # Raw (still %-encoded) path, so links to other sites survive unchanged
+    raw = request.environ.get("RAW_URI") or request.environ.get("REQUEST_URI")
+    path = raw.split("?", 1)[0] if raw else request.path
     yt_url = None
     if m := PREFIX_RE.match(path):
         yt_url = f"https://{m.group(1)}{m.group(2) or '/'}"
     elif YT_PATH_RE.match(path):
         yt_url = f"https://www.youtube.com{path}"
+    elif ANY_SITE and (m := ANY_PREFIX_RE.match(path)):
+        yt_url = f"{m.group(1).lower()}://{m.group(2)}{m.group(3) or '/'}"
     if yt_url:
         if qs:
             yt_url += "?" + qs
@@ -417,13 +559,16 @@ def health():
 @app.post("/api/jobs")
 def create_job():
     data = request.get_json(silent=True) or {}
-    url = clean_youtube_url(data.get("url", ""))
-    if not url:
-        return jsonify(error="Please enter a YouTube link."), 400
+    url = clean_url(data.get("url", ""))
+    if not url or (not ANY_SITE and not is_youtube(url)):
+        return jsonify(error="Please enter a video link." if ANY_SITE
+                       else "Please enter a YouTube link."), 400
+    if not is_youtube(url) and not is_public_host(urlsplit(url).hostname):
+        return jsonify(error="That address can't be downloaded from this server."), 400
     quality = QUALITIES.get(str(data.get("quality", "best")), None)
     container = data.get("format", "mp4") if data.get("format") in FORMATS else "mp4"
     playlist = data.get("playlist") is True
-    if not playlist:
+    if not playlist and is_youtube(url):
         url = strip_playlist(url)
         if not url:
             return jsonify(error="This link is a whole playlist. Turn on "
@@ -459,6 +604,11 @@ def job_file(job_id):
     if job.state["status"] != "done" or not job.result or not job.result.is_file():
         abort(404)
     return send_file(job.result, as_attachment=True, download_name=job.result.name)
+
+
+@app.get("/api/config")
+def config():
+    return jsonify(any_site=ANY_SITE, login=bool(PASSWORD))
 
 
 @app.get("/api/version")

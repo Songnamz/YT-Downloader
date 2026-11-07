@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Log in · YT Downloader</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%23e11d2a'/><path d='M16 8v11m0 0-5-5m5 5 5-5M9 24h14' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+<script>
+  // Same theme choice as the main page
+  try { const t = localStorage.getItem("theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch {}
+</script>
+<style>
+  :root {
+    --bg: #f6f6f7; --card: rgba(255,255,255,.72); --border: rgba(15,23,42,.08); --field: rgba(15,23,42,.04);
+    --text: #0f172a; --muted: #64748b; --accent: #e11d2a; --accent-2: #f97316; --accent-hover: #c81623;
+    --error: #dc2626; --glow1: rgba(239,68,68,.16); --glow2: rgba(249,115,22,.14);
+    --shadow: 0 1px 2px rgba(15,23,42,.04), 0 12px 32px -12px rgba(15,23,42,.14);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0c0d10; --card: rgba(24,26,31,.7); --border: rgba(255,255,255,.08); --field: rgba(255,255,255,.05);
+      --text: #e8eaf2; --muted: #8b92a8; --accent: #f43f4a; --accent-2: #fb923c; --accent-hover: #e11d2a;
+      --error: #f87171; --glow1: rgba(239,68,68,.16); --glow2: rgba(249,115,22,.10);
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 16px 40px -16px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0c0d10; --card: rgba(24,26,31,.7); --border: rgba(255,255,255,.08); --field: rgba(255,255,255,.05);
+    --text: #e8eaf2; --muted: #8b92a8; --accent: #f43f4a; --accent-2: #fb923c; --accent-hover: #e11d2a;
+    --error: #f87171; --glow1: rgba(239,68,68,.16); --glow2: rgba(249,115,22,.10);
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 16px 40px -16px rgba(0,0,0,.6);
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--bg); }
+  body {
+    margin: 0; min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; padding: 16px;
+    color: var(--text); background: var(--bg);
+    background-image:
+      radial-gradient(40rem 28rem at 10% -10%, var(--glow1), transparent 70%),
+      radial-gradient(36rem 26rem at 100% 0%, var(--glow2), transparent 70%);
+    background-attachment: fixed; background-repeat: no-repeat;
+    font: 15px/1.5 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans Thai", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  form {
+    width: 100%; max-width: 360px; background: var(--card); border: 1px solid var(--border); border-radius: 20px;
+    padding: 28px 24px; box-shadow: var(--shadow); text-align: center;
+    -webkit-backdrop-filter: blur(16px) saturate(140%); backdrop-filter: blur(16px) saturate(140%);
+  }
+  .logo {
+    width: 56px; height: 56px; border-radius: 16px; margin: 0 auto 14px; display: grid; place-items: center;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: 0 8px 24px -8px var(--accent);
+  }
+  .logo svg { width: 30px; height: 30px; }
+  h1 { font-size: 22px; margin: 0; letter-spacing: -.02em; font-weight: 750; }
+  .sub { color: var(--muted); font-size: 14px; margin: 4px 0 20px; }
+  input {
+    width: 100%; height: 48px; border-radius: 12px; border: 1px solid var(--border); background: var(--field);
+    color: var(--text); padding: 0 14px; font: inherit; font-size: 16px; text-align: center; letter-spacing: .2em;
+    outline: none; transition: border-color .15s, box-shadow .15s;
+  }
+  input:focus { border-color: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent); }
+  input::placeholder { letter-spacing: normal; color: var(--muted); }
+  button {
+    width: 100%; height: 48px; margin-top: 12px; border: 0; border-radius: 12px; cursor: pointer; color: #fff;
+    font: inherit; font-weight: 600; background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    box-shadow: 0 6px 18px -6px var(--accent); transition: transform .1s;
+  }
+  button:hover { background: linear-gradient(135deg, var(--accent-hover), var(--accent-2)); }
+  button:active { transform: scale(.98); }
+  #err { color: var(--error); font-size: 14px; min-height: 21px; margin: 12px 0 0; }
+</style>
+</head>
+<body>
+<form method="post" action="/login">
+  <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 20h14"/></svg></div>
+  <h1>YT Downloader</h1>
+  <div class="sub">Enter the password to continue</div>
+  <input type="password" name="password" id="pw" placeholder="Password" autocomplete="current-password" required autofocus>
+  <input type="hidden" name="next" id="next">
+  <button type="submit">Log in</button>
+  <p id="err" role="alert"></p>
+</form>
+<script>
+  const q = new URLSearchParams(location.search);
+  document.getElementById("next").value = q.get("next") || "/";
+  const msg = { wrong: "Wrong password, try again.",
+                locked: "Too many wrong tries. Please wait 15 minutes." }[q.get("e")];
+  if (msg) document.getElementById("err").textContent = msg;
+</script>
+</body>
+</html>

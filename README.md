@@ -19,12 +19,53 @@ These forms all work: `/https://www.youtube.com/...`, `/youtube.com/...`,
 There's also a **bookmarklet** on the page: drag it to the bookmarks bar, then
 click it while watching a video.
 
+## Other sites
+
+The **Other sites** menu takes a link to any page yt-dlp can read: more than
+1,800 sites ([full list](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md)),
+such as X/Twitter, Dailymotion, TikTok, Facebook, Instagram and Reddit. Many other
+pages with a video player work too, as do direct `.mp4`/`.m3u8` links. The
+server works out which video is on the page; quality, format and playlist
+options work the same way as for YouTube.
+
+The shortcut works for these too. Type your site in front of the full address,
+including `https://`:
+
+```
+yt.example.com/https://www.dailymotion.com/video/x8j6s5k
+```
+
+The bookmarklet works on any page. Videos behind a login or protected with DRM
+(Netflix, Disney+, Spotify...) can't be downloaded.
+
+The server refuses links to private addresses (localhost, your LAN, cloud
+metadata), so the app can't be used to reach machines on your network. Set
+`ALLOW_ANY_SITE=0` to allow YouTube links only.
+
 > **Why not `ytyoutube.com`?** That trick only works if you own the domain
 > `ytyoutube.com`, and it was registered by someone else in 2016. If you ever
 > buy a look-alike domain (e.g. `ytyoutube.net`) and point it at this app, paths
 > like `/watch?v=...` already work on it. Note that domains containing
 > "youtube" can get trademark complaints, which is why the default setup uses
 > your own domain instead.
+
+## Login
+
+The app asks for a password before anything else (the shortcut and bookmarklet
+continue to the download after you log in). You stay logged in for 30 days
+(`LOGIN_DAYS`). After 5 wrong tries an IP has to wait 15 minutes.
+
+The password lives in a `.env` file next to `docker-compose.yml`, which is
+never committed:
+
+```bash
+cp .env.example .env          # then edit APP_PASSWORD
+echo "SECRET_KEY=$(openssl rand -hex 32)" >> .env
+docker compose up -d          # apply
+```
+
+Changing the password logs everyone out. Leave `APP_PASSWORD` empty to turn
+the login off.
 
 ## Run locally (macOS)
 
@@ -75,6 +116,7 @@ python app.py            # http://localhost:8000
 | `CONCURRENT_FRAGMENTS` | 8 | parallel connections per download (1 = off) |
 | `PLAYLIST_PARALLEL` | 3 | playlist videos downloaded at the same time |
 | `AUTO_UPDATE` | 1 | update yt-dlp on container start |
+| `ALLOW_ANY_SITE` | 1 | accept links from sites other than YouTube (0 = YouTube only) |
 
 ### "Sign in to confirm you're not a bot"
 
