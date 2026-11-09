@@ -260,8 +260,8 @@
       <label class="drop" id="drop" tabindex="0">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4m0 0-4.5 4.5M12 4l4.5 4.5M5 20h14"/></svg>
         <b id="picked">Choose a file or drop it here</b>
-        <span id="pickHint">MP4 video → MP3 audio, or MP3 audio → MP4 video. Any size.</span>
-        <input type="file" id="pick" hidden accept=".mp4,.m4v,.mov,.mkv,.webm,.mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,video/*,audio/*">
+        <span id="pickHint">Any video → MP3 audio, any audio → MP4 video. Any file type, any size.</span>
+        <input type="file" id="pick" hidden>
       </label>
       <div class="convrow">
         <div class="to" id="convTo">Converts to: <b>—</b></div>
@@ -576,20 +576,14 @@ function size(n) {
 }
 function pickFile(f) {
   if (!f) return;
+  // Any file is accepted; types not listed are detected on the server
   const to = CONVERT_TO[ext(f.name)];
-  if (!to) {
-    picked = null;
-    $("picked").textContent = f.name;
-    $("pickHint").textContent = "This file type can't be converted. Choose an MP4 or MP3 file.";
-    $("pickHint").className = "err";
-    $("convTo").innerHTML = "Converts to: <b>—</b>";
-  } else {
-    picked = f;
-    $("picked").textContent = f.name;
-    $("pickHint").textContent = size(f.size) + " · click to choose another file";
-    $("pickHint").className = "";
-    $("convTo").innerHTML = `Converts to: <b>${to.toUpperCase()}</b>`;
-  }
+  picked = f;
+  $("picked").textContent = f.name;
+  $("pickHint").textContent = size(f.size) + " · click to choose another file";
+  $("pickHint").className = "";
+  $("convTo").innerHTML = to ? `Converts to: <b>${to.toUpperCase()}</b>`
+                             : "Converts to: <b>MP3 or MP4</b> (detected after upload)";
   if (!job) setBusy(false);
 }
 const drop = $("drop"), pick = $("pick");

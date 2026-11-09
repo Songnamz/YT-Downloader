@@ -58,6 +58,9 @@ The **Converter** menu converts files from your own device:
   has none) with the sound, e.g. for apps that only accept videos.
 
 MOV/MKV/WEBM videos also become MP3, and M4A/WAV/FLAC/OGG audio becomes MP4.
+Any other file type is accepted too (AVI, WMV, FLV, 3GP, TS, AMR, …, even no
+extension): after the upload the server looks inside it and makes an MP3 if it
+has a video picture, or an MP4 if it is sound only.
 
 There is no size limit. The browser uploads the file in 32 MB pieces, so
 Cloudflare's 100 MB request limit doesn't apply, and a piece that fails

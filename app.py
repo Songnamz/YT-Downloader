@@ -8,7 +8,7 @@ for progress, then fetches the finished file (or a zip for playlists).
   https://<this-host>/watch?v=ID                            (YouTube-shaped path)
   https://<this-host>/https://www.dailymotion.com/video/ID  (any site yt-dlp supports)
 
-Converter: the browser uploads a local file in chunks (so no single request
+Converter: the browser uploads a local file of any type and size in chunks (so no single request
 hits a proxy's size limit), ffmpeg converts it (video -> MP3, audio -> MP4)
 and the browser fetches the result like a finished download.
 """
@@ -421,7 +421,9 @@ class Job:
 # --------------------------------------------------------------------------- #
 # Converter: upload a local file, convert it with ffmpeg
 # --------------------------------------------------------------------------- #
-# Input extension -> output format: video in gives MP3, audio in gives MP4
+# Input extension -> output format: video in gives MP3, audio in gives MP4.
+# Any other file is accepted too: after the upload ffprobe looks inside it and
+# picks MP3 when it has a real video picture, MP4 when it is sound only.
 CONVERT_TO = {ext: "mp3" for ext in (".mp4", ".m4v", ".mov", ".mkv", ".webm")}
 CONVERT_TO.update({ext: "mp4" for ext in
                    (".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".opus")})
@@ -429,6 +431,7 @@ CONVERT_TO.update({ext: "mp4" for ext in
 # request bodies over 100 MB, so each piece stays well under that.
 UPLOAD_CHUNK = 32 * 1024 ** 2
 UPLOAD_IDLE = 30 * 60      # an upload that sends nothing for this long is dropped
+SAFE_EXT_RE = re.compile(r"\.[A-Za-z0-9]{1,12}")
 BAD_NAME_RE = re.compile(r'[\x00-\x1f\x7f/\\:*?"<>|]+')
 
 
@@ -462,9 +465,10 @@ class ConvertJob(Job):
         self.received = 0
         self.touched = time.time()
         self.upload_lock = threading.Lock()
-        self.src = self.dir / ("input" + Path(name).suffix.lower())
-        stem = BAD_NAME_RE.sub("_", Path(name).stem).strip(" ._")[:150] or "converted"
-        self.dest = self.out / f"{stem}.{target}"
+        suffix = Path(name).suffix.lower()
+        self.src = self.dir / ("input" + (suffix if SAFE_EXT_RE.fullmatch(suffix) else ""))
+        self.stem = BAD_NAME_RE.sub("_", Path(name).stem).strip(" ._")[:150] or "converted"
+        self.dest = self.out / f"{self.stem}.{target}"
         self.out.mkdir(parents=True, exist_ok=True)
         self.update(status="uploading", stage="Uploading…", file=name)
 
@@ -584,6 +588,12 @@ class ConvertJob(Job):
                 duration = float(info["format"].get("duration") or 0)
             except ValueError:
                 duration = 0.0
+            if self.container == "auto":
+                has_picture = any(s.get("codec_type") == "video"
+                                  and not s.get("disposition", {}).get("attached_pic")
+                                  for s in streams)
+                self.container = "mp3" if has_picture else "mp4"
+                self.dest = self.out / f"{self.stem}.{self.container}"
             self.update(stage="Converting…")
             args = (self.mp3_command() if self.container == "mp3"
                     else self.mp4_command(streams, duration))
@@ -840,9 +850,8 @@ def convert_create():
     # Just the file name, never a path
     name = str(data.get("name") or "").replace("\\", "/").rsplit("/", 1)[-1][-255:]
     size = data.get("size")
-    target = CONVERT_TO.get(Path(name).suffix.lower())
-    if not target:
-        return jsonify(error="Choose an MP4 video or an MP3 audio file."), 400
+    # Every file type is accepted; unknown ones are sorted out after upload
+    target = CONVERT_TO.get(Path(name).suffix.lower(), "auto")
     if type(size) is not int or size <= 0:
         return jsonify(error="This file is empty."), 400
     make_room()
