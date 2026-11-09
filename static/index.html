@@ -151,6 +151,22 @@
   .drop b { font-size: 15px; }
   .drop span { color: var(--muted); font-size: 13px; }
   #picked { font-weight: 600; word-break: break-word; }
+  .queue { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 6px; max-height: 320px; overflow-y: auto; }
+  .queue:empty { display: none; }
+  .queue li {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 0 10px; align-items: center;
+    padding: 8px 8px 8px 12px; border-radius: 12px; background: var(--field); border: 1px solid transparent; font-size: 13px;
+  }
+  .queue li.active { border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+  .queue .nm { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .queue .meta { color: var(--muted); font-size: 12px; grid-column: 1; }
+  .queue .st { grid-row: 1 / span 2; grid-column: 2; color: var(--muted); font-size: 12px; text-align: right; max-width: 220px; }
+  .queue .x, .queue .sv {
+    grid-row: 1 / span 2; grid-column: 3; height: 28px; min-width: 28px; padding: 0 8px; border-radius: 8px; font-size: 12px;
+  }
+  .queue .x { font-size: 16px; line-height: 1; }
+  .queue li.active .x { visibility: hidden; }
+  .convrow .btns { display: flex; gap: 8px; }
   .convrow { display: flex; gap: 12px; align-items: center; justify-content: space-between; margin-top: 14px; flex-wrap: wrap; }
   .convrow .to { color: var(--muted); font-size: 14px; }
   .convrow .to b { color: var(--text); }
@@ -259,13 +275,17 @@
       <label class="h" for="pick">File from your device</label>
       <label class="drop" id="drop" tabindex="0">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4m0 0-4.5 4.5M12 4l4.5 4.5M5 20h14"/></svg>
-        <b id="picked">Choose a file or drop it here</b>
-        <span id="pickHint">Any video → MP3 audio, any audio → MP4 video. Any file type, any size.</span>
-        <input type="file" id="pick" hidden>
+        <b id="picked">Choose files or drop them here</b>
+        <span id="pickHint">Any video → MP3 audio, any audio → MP4 video. Any file type, any size, as many files as you like.</span>
+        <input type="file" id="pick" hidden multiple>
       </label>
+      <ul class="queue" id="queue"></ul>
       <div class="convrow">
-        <div class="to" id="convTo">Converts to: <b>—</b></div>
-        <button type="button" class="primary" id="convGo" disabled>Convert</button>
+        <div class="to" id="convTo">No files chosen</div>
+        <div class="btns">
+          <button type="button" id="clearQ" style="display:none">Clear list</button>
+          <button type="button" class="primary" id="convGo" disabled>Convert</button>
+        </div>
       </div>
     </div>
     <div class="dl-only">
@@ -340,7 +360,8 @@
     <p><b>MP4 → MP3</b>: keeps only the sound, at the best MP3 quality.</p>
     <p><b>MP3 → MP4</b>: makes a video of the sound with the song's cover picture, or a black screen if it has none. Handy for apps that only accept videos.</p>
     <p>Other files work too: MOV, MKV and WEBM videos become MP3; M4A, WAV, FLAC and OGG audio become MP4.</p>
-    <p>There's no size limit. Keep this tab open until the file has finished uploading. The converted file is saved automatically, and both copies are deleted from the server a few minutes later.</p>
+    <p>There's no limit on size or on the number of files. Pick or drop as many as you like; they're converted one after another, and you can add more while it runs. Keep this tab open until the last file has finished uploading.</p>
+    <p>Each converted file is saved automatically as soon as it's ready (your browser may ask once to allow several downloads). Both copies are deleted from the server a few minutes later.</p>
   </div>
   </div>
 
@@ -417,7 +438,7 @@ function setSite(v) {
     $("url").placeholder = v === "yt" ? "https://www.youtube.com/watch?v=…" : "https://www.dailymotion.com/video/…";
   }
   if (!job && $("status").textContent === "Ready")
-    $("file").textContent = v === "conv" ? "Choose a file and press Convert" : "Paste a link and press Download";
+    $("file").textContent = v === "conv" ? "Choose files and press Convert" : "Paste a link and press Download";
   store.set("site", v);
 }
 document.querySelectorAll("#site button").forEach(b => b.onclick = () => {
@@ -463,7 +484,9 @@ function setBusy(b) {
   go.disabled = b && busyBtn !== go;
   convGo.textContent = b && busyBtn === convGo ? "Cancel" : "Convert";
   convGo.className = b && busyBtn === convGo ? "danger" : "primary";
-  convGo.disabled = b ? busyBtn !== convGo : !picked;
+  const n = waiting().length;
+  if (!b) convGo.textContent = n > 1 ? `Convert ${n} files` : "Convert";
+  convGo.disabled = b ? busyBtn !== convGo : !n;
 }
 function triggerSave(id) {
   const href = `/api/jobs/${id}/file`;
@@ -473,7 +496,7 @@ function triggerSave(id) {
 }
 
 async function start(url) {
-  if (job) return;
+  if (job || batch) return;
   url = url.trim();
   if (!url) return;
   mode = "download";
@@ -563,43 +586,70 @@ go.onclick = (e) => {
   fetch(`/api/jobs/${job}/cancel`, { method: "POST" });
   setStatus("Cancelling…");
 };
-// ---- converter: pick a file, upload it in pieces, then convert ----------
+// ---- converter: pick files, upload each in pieces, then convert --------
 const CONVERT_TO = {};
 ["mp4", "m4v", "mov", "mkv", "webm"].forEach(e => CONVERT_TO[e] = "mp3");
 ["mp3", "m4a", "aac", "wav", "flac", "ogg", "opus"].forEach(e => CONVERT_TO[e] = "mp4");
-let picked = null;
+// Files picked so far: {file, el, state: waiting|active|done|error}
+let queue = [], batch = null;
+class Stop extends Error {}          // ends the batch (cancel, login needed)
 const ext = (name) => (name.match(/\.([^.]+)$/) || [, ""])[1].toLowerCase();
+const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+function waiting() { return queue.filter(q => q.state === "waiting"); }
 function size(n) {
   const u = ["B", "KB", "MB", "GB", "TB"]; let i = 0;
   while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
   return (i ? n.toFixed(1) : n) + " " + u[i];
 }
-function pickFile(f) {
-  if (!f) return;
-  // Any file is accepted; types not listed are detected on the server
-  const to = CONVERT_TO[ext(f.name)];
-  picked = f;
-  $("picked").textContent = f.name;
-  $("pickHint").textContent = size(f.size) + " · click to choose another file";
-  $("pickHint").className = "";
-  $("convTo").innerHTML = to ? `Converts to: <b>${to.toUpperCase()}</b>`
-                             : "Converts to: <b>MP3 or MP4</b> (detected after upload)";
-  if (!job) setBusy(false);
+function rowStatus(q, text, cls) {
+  const st = q.el.querySelector(".st");
+  st.textContent = text; st.className = "st " + (cls || "");
 }
+function renderSummary() {
+  const w = waiting(), total = w.reduce((a, q) => a + q.file.size, 0);
+  $("picked").textContent = queue.length ? "Add more files or drop them here" : "Choose files or drop them here";
+  $("convTo").innerHTML = w.length
+    ? `<b>${w.length}</b> file${w.length > 1 ? "s" : ""} to convert · <b>${size(total)}</b>`
+    : queue.length ? "No files waiting" : "No files chosen";
+  $("clearQ").style.display = queue.length && !batch ? "" : "none";
+  if (!job && !batch) setBusy(false);
+}
+function addFiles(files) {
+  for (const f of files) {
+    const q = { file: f, state: "waiting" };
+    const li = document.createElement("li");
+    li.innerHTML = '<div class="nm"></div><div class="meta"></div><span class="st"></span>' +
+                   '<button type="button" class="x" title="Remove" aria-label="Remove">×</button>';
+    const to = CONVERT_TO[ext(f.name)];
+    li.querySelector(".nm").textContent = f.name;
+    li.querySelector(".meta").textContent = `${size(f.size)} → ${to ? to.toUpperCase() : "MP3 or MP4 (detected)"}`;
+    li.querySelector(".x").onclick = () => {
+      if (q.state === "active") return;
+      queue = queue.filter(o => o !== q); li.remove(); renderSummary();
+    };
+    q.el = li; rowStatus(q, "Waiting");
+    $("queue").appendChild(li); queue.push(q);
+  }
+  renderSummary();
+}
+$("clearQ").onclick = () => {
+  if (batch) return;
+  queue = []; $("queue").textContent = ""; renderSummary();
+};
 const drop = $("drop"), pick = $("pick");
-pick.onchange = () => { pickFile(pick.files[0]); pick.value = ""; };
+pick.onchange = () => { addFiles([...pick.files]); pick.value = ""; };
 drop.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick.click(); } };
 drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
 drop.ondragleave = () => drop.classList.remove("over");
 drop.ondrop = (e) => {
-  e.preventDefault(); drop.classList.remove("over");
-  if (!job) pickFile(e.dataTransfer.files[0]);
+  e.preventDefault(); e.stopPropagation(); drop.classList.remove("over");
+  addFiles([...e.dataTransfer.files]);
 };
 // Dropping a file anywhere else would make the browser open it and leave the app
 window.addEventListener("dragover", (e) => e.preventDefault());
 window.addEventListener("drop", (e) => {
   e.preventDefault();
-  if (site === "conv" && !job) pickFile(e.dataTransfer.files[0]);
+  if (site === "conv") addFiles([...e.dataTransfer.files]);
 });
 
 class HttpError extends Error { constructor(msg, status) { super(msg); this.status = status; } }
@@ -621,36 +671,39 @@ function sendPiece(id, blob, offset, onProgress) {
     x.send(blob);
   });
 }
+function saveFile(id) {
+  const a = document.createElement("a"); a.href = `/api/jobs/${id}/file`; a.download = "";
+  document.body.appendChild(a); a.click(); a.remove();
+}
+async function api(url, body) {
+  const r = await fetch(url, body === undefined ? { method: "POST" } : {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (r.status === 401) { toLogin(); throw new Stop(); }
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+  return d;
+}
 
-async function convert() {
-  if (job || !picked) return;
-  const file = picked;
-  mode = "convert";
-  $("thumb").classList.remove("show");
-  $("save").style.display = "none";
-  $("pct").textContent = ""; $("speed").textContent = ""; $("log").textContent = "";
-  $("file").textContent = file.name;
+// Upload one file, convert it and wait until it's done; throws on failure
+async function convertOne(q, label) {
+  const file = q.file;
+  q.state = "active"; q.el.classList.add("active");
+  $("file").textContent = file.name; $("pct").textContent = ""; $("speed").textContent = "";
   bar.classList.add("indet"); bar.firstElementChild.style.width = "";
-  setStatus("Starting…");
-  let id = null;
+  setStatus(`${label} · Starting…`); rowStatus(q, "Starting…");
+  const d = await api("/api/convert", { name: file.name, size: file.size });
+  const id = job = d.id, piece = d.chunk, t0 = performance.now();
   try {
-    let r = await fetch("/api/convert", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: file.name, size: file.size }),
-    });
-    if (r.status === 401) return toLogin();
-    let d = await r.json();
-    if (!r.ok) throw new Error(d.error || "Request failed");
-    job = id = d.id; setBusy(true);
-    const piece = d.chunk, t0 = performance.now();
     bar.classList.remove("indet");
     let offset = 0, tries = 0;
     while (offset < file.size) {
+      if (batch.cancelled) throw new Stop();
       const showProgress = (loaded) => {
         const done = Math.min(file.size, offset + loaded);
         const pct = done / file.size * 100;
         bar.firstElementChild.style.width = pct + "%";
         $("pct").textContent = Math.floor(pct) + "%";
+        rowStatus(q, `Uploading ${Math.floor(pct)}%`);
         const secs = (performance.now() - t0) / 1000, bps = done / secs;
         const left = bps > 0 ? (file.size - done) / bps : 0;
         $("speed").textContent = secs > 1
@@ -658,52 +711,108 @@ async function convert() {
               Math.floor(left / 60)}:${String(Math.floor(left % 60)).padStart(2, "0")} remaining`
           : `${size(done)} of ${size(file.size)}`;
       };
-      setStatus("Uploading to server…");
+      setStatus(`${label} · Uploading…`);
       try {
         offset = await sendPiece(id, file.slice(offset, offset + piece), offset, showProgress);
         tries = 0;
       } catch (e) {
-        if (job !== id) return;                          // cancelled by the user
-        if (e.status === 401) return toLogin();
+        if (batch.cancelled) throw new Stop();
+        if (e.status === 401) { toLogin(); throw new Stop(); }
         if (e.status === 0 || e.status >= 500 && e.status !== 507) {
-          if (++tries > 5) throw new Error("The upload keeps failing. Check your connection and try again.");
-          setStatus(`Connection problem, retrying (${tries} of 5)…`);
-          await new Promise(res => setTimeout(res, 2000 * tries));
-          if (job !== id) return;
+          if (++tries > 5) throw new Error("The upload keeps failing. Check your connection.");
+          setStatus(`${label} · Connection problem, retrying (${tries} of 5)…`);
+          await sleep(2000 * tries);
+          if (batch.cancelled) throw new Stop();
           continue;                                      // send the same piece again
         }
         throw e;
       }
     }
     upload = null;
-    if (job !== id) return;
-    r = await fetch(`/api/convert/${id}/start`, { method: "POST" });
-    if (r.status === 401) return toLogin();
-    d = await r.json();
-    if (!r.ok) throw new Error(d.error || "Request failed");
+    if (batch.cancelled) throw new Stop();
+    await api(`/api/convert/${id}/start`);
     $("pct").textContent = ""; $("speed").textContent = "";
     bar.firstElementChild.style.width = "0";
-    poll();
+    for (;;) {
+      let r;
+      try { r = await fetch(`/api/jobs/${id}`); } catch { await sleep(2000); continue; }
+      if (r.status === 401) { toLogin(); throw new Stop(); }
+      if (r.status === 404) throw new Error("The server restarted and lost this file.");
+      if (!r.ok) { await sleep(2000); continue; }
+      const s = await r.json();
+      $("log").textContent = s.log.join("\n");
+      if (s.status === "done") return id;
+      if (s.status === "error") throw new Error(s.error || "Conversion failed");
+      if (s.status === "cancelled") throw new Stop();
+      const running = s.status === "running" && s.percent > 0;
+      bar.classList.toggle("indet", !running);
+      if (running) {
+        bar.firstElementChild.style.width = s.percent + "%";
+        $("pct").textContent = Math.floor(s.percent) + "%";
+        $("speed").textContent = [s.speed, s.eta && s.eta + " remaining"].filter(Boolean).join("   •   ");
+        rowStatus(q, `Converting ${Math.floor(s.percent)}%`);
+      } else {
+        $("pct").textContent = ""; $("speed").textContent = ""; rowStatus(q, s.stage);
+      }
+      setStatus(`${label} · ${s.stage}`);
+      await sleep(700);
+    }
   } catch (e) {
-    if (id && job !== id) return;                      // cancelled meanwhile
-    if (job) fetch(`/api/jobs/${job}/cancel`, { method: "POST" });
-    finish(); bar.firstElementChild.style.width = "0"; $("pct").textContent = "";
-    setStatus(failText(), "err"); $("file").textContent = e.message;
+    upload?.abort(); upload = null;
+    fetch(`/api/jobs/${id}/cancel`, { method: "POST" });   // free the server copy
+    throw e;
+  } finally {
+    job = null;
   }
 }
-convGo.onclick = () => {
-  if (!job) return convert();
-  if (upload) {
-    upload.abort();
-    fetch(`/api/jobs/${job}/cancel`, { method: "POST" });
-    finish(); bar.firstElementChild.style.width = "0"; $("pct").textContent = "";
-    setStatus("Cancelled");
-    return;
+
+async function convertAll() {
+  if (job || batch || !waiting().length) return;
+  mode = "convert"; batch = { cancelled: false };
+  $("thumb").classList.remove("show"); $("save").style.display = "none"; $("log").textContent = "";
+  setBusy(true); renderSummary();
+  let ok = 0, failed = 0, q;
+  while (!batch.cancelled && (q = waiting()[0])) {
+    const label = `File ${ok + failed + 1} of ${ok + failed + waiting().length}`;
+    try {
+      const id = await convertOne(q, label);
+      ok++; q.state = "done"; rowStatus(q, "✓ Saved", "ok");
+      const a = document.createElement("a");
+      a.className = "btn sv"; a.href = `/api/jobs/${id}/file`; a.download = ""; a.textContent = "Save";
+      a.title = "Save again (available for a few minutes)";
+      q.el.querySelector(".x").replaceWith(a);
+      saveFile(id);
+    } catch (e) {
+      if (e instanceof Stop) {
+        q.state = "waiting"; rowStatus(q, "Cancelled");   // Convert again to retry
+        break;
+      }
+      failed++; q.state = "error"; rowStatus(q, e.message, "err");
+    } finally {
+      q.el.classList.remove("active");
+    }
   }
-  fetch(`/api/jobs/${job}/cancel`, { method: "POST" });
+  const cancelled = batch.cancelled, left = waiting().length;
+  batch = null; job = null; upload = null;
+  bar.classList.remove("indet"); $("speed").textContent = ""; $("pct").textContent = "";
+  bar.firstElementChild.style.width = ok && !failed && !cancelled ? "100%" : "0";
+  const parts = [`${ok} converted`];
+  if (failed) parts.push(`${failed} failed`);
+  if (left) parts.push(`${left} not started`);
+  if (cancelled) setStatus("Cancelled");
+  else if (failed) setStatus(ok ? "Some files failed" : failText(), "err");
+  else setStatus(`✓  ${ok === 1 ? "File" : `All ${ok} files`} converted — saved to your device`, "ok");
+  $("file").textContent = parts.join(" · ") + (failed ? " — see the list for details" : "");
+  setBusy(false); renderSummary();
+}
+convGo.onclick = () => {
+  if (!batch) return convertAll();
+  batch.cancelled = true;
+  upload?.abort();
+  if (job) fetch(`/api/jobs/${job}/cancel`, { method: "POST" });
   setStatus("Cancelling…");
 };
-window.addEventListener("beforeunload", (e) => { if (upload) e.preventDefault(); });
+window.addEventListener("beforeunload", (e) => { if (upload || batch) e.preventDefault(); });
 
 $("paste").onclick = async () => {
   try { $("url").value = (await navigator.clipboard.readText()).trim(); } catch { $("url").focus(); }
