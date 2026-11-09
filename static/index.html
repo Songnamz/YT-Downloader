@@ -282,6 +282,12 @@
         <input type="file" id="pick" hidden multiple>
       </label>
       <ul class="queue" id="queue"></ul>
+      <div class="opts" style="margin-top:14px">
+        <div class="field">
+          <label>Convert to</label>
+          <div class="seg" id="convFmt"><button type="button" data-v="auto" title="Video becomes MP3, audio becomes MP4">Auto</button><button type="button" data-v="mp3" title="The sound only, as MP3">MP3</button><button type="button" data-v="wav" title="The sound only, as uncompressed WAV">WAV</button></div>
+        </div>
+      </div>
       <label class="switch"><input type="checkbox" id="autoSave" checked> Save each file as soon as it's converted</label>
       <div class="convrow">
         <div class="to" id="convTo">No files chosen</div>
@@ -364,6 +370,7 @@
     <p><b>MP4 → MP3</b>: keeps only the sound, at the best MP3 quality.</p>
     <p><b>MP3 → MP4</b>: makes a video of the sound with the song's cover picture, or a black screen if it has none. Handy for apps that only accept videos.</p>
     <p>Other files work too: MOV, MKV and WEBM videos become MP3; M4A, WAV, FLAC and OGG audio become MP4.</p>
+    <p>Pick <b>MP3</b> or <b>WAV</b> under <i>Convert to</i> to take the sound out of any file instead (a video, or audio in another format). WAV is uncompressed, so it's about 10 MB per minute.</p>
     <p>There's no limit on size or on the number of files. Pick or drop as many as you like; they're converted one after another, and you can add more while it runs. Keep this tab open until the last file has finished uploading.</p>
     <p>Each converted file is saved automatically as soon as it's ready (your browser may ask once to allow several downloads). To get everything in one go instead, turn that off and press <b>Download all as zip</b> when the batch is done.</p>
     <p>Converted files stay on the server while this page is open, and are deleted a few minutes after you close it.</p>
@@ -625,20 +632,37 @@ function renderSummary() {
   $("zipAll").textContent = ready > 1 ? `Download all ${ready} as zip` : "Download as zip";
   if (!job && !batch) setBusy(false);
 }
+// Output format: "auto" (video -> MP3, audio -> MP4), "mp3" or "wav"
+let convFmt = store.get("convFmt", "auto");
+if (!["auto", "mp3", "wav"].includes(convFmt)) convFmt = "auto";
+function targetOf(f) {
+  return convFmt !== "auto" ? convFmt.toUpperCase()
+       : (CONVERT_TO[ext(f.name)] || "").toUpperCase() || "MP3 or MP4 (detected)";
+}
+function showTarget(q) {
+  q.el.querySelector(".meta").textContent = `${size(q.file.size)} → ${targetOf(q.file)}`;
+}
+function syncConvFmt() {
+  document.querySelectorAll("#convFmt button").forEach(b => b.classList.toggle("on", b.dataset.v === convFmt));
+  waiting().forEach(showTarget);           // files already done keep what they got
+}
+document.querySelectorAll("#convFmt button").forEach(b => b.onclick = () => {
+  convFmt = b.dataset.v; store.set("convFmt", convFmt); syncConvFmt();
+});
+syncConvFmt();
 function addFiles(files) {
   for (const f of files) {
     const q = { file: f, state: "waiting" };
     const li = document.createElement("li");
     li.innerHTML = '<div class="nm"></div><div class="meta"></div><span class="st"></span>' +
                    '<button type="button" class="x" title="Remove" aria-label="Remove">×</button>';
-    const to = CONVERT_TO[ext(f.name)];
     li.querySelector(".nm").textContent = f.name;
-    li.querySelector(".meta").textContent = `${size(f.size)} → ${to ? to.toUpperCase() : "MP3 or MP4 (detected)"}`;
+    q.el = li; showTarget(q);
     li.querySelector(".x").onclick = () => {
       if (q.state === "active") return;
       queue = queue.filter(o => o !== q); li.remove(); renderSummary();
     };
-    q.el = li; rowStatus(q, "Waiting");
+    rowStatus(q, "Waiting");
     $("queue").appendChild(li); queue.push(q);
   }
   renderSummary();
@@ -702,7 +726,8 @@ async function convertOne(q, label) {
   $("file").textContent = file.name; $("pct").textContent = ""; $("speed").textContent = "";
   bar.classList.add("indet"); bar.firstElementChild.style.width = "";
   setStatus(`${label} · Starting…`); rowStatus(q, "Starting…");
-  const d = await api("/api/convert", { name: file.name, size: file.size });
+  showTarget(q);                              // the format it really gets
+  const d = await api("/api/convert", { name: file.name, size: file.size, to: convFmt });
   const id = job = d.id, piece = d.chunk, t0 = performance.now();
   try {
     bar.classList.remove("indet");

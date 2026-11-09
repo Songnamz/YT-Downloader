@@ -58,6 +58,8 @@ The **Converter** menu converts files from your own device:
   has none) with the sound, e.g. for apps that only accept videos.
 
 MOV/MKV/WEBM videos also become MP3, and M4A/WAV/FLAC/OGG audio becomes MP4.
+That's the **Auto** choice; set **Convert to** to **MP3** or **WAV** to get just
+the sound of any file in that format (WAV is 16-bit PCM, RF64 past 4 GB).
 Any other file type is accepted too (AVI, WMV, FLV, 3GP, TS, AMR, …, even no
 extension): after the upload the server looks inside it and makes an MP3 if it
 has a video picture, or an MP4 if it is sound only.

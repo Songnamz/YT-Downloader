@@ -427,6 +427,8 @@ class Job:
 CONVERT_TO = {ext: "mp3" for ext in (".mp4", ".m4v", ".mov", ".mkv", ".webm")}
 CONVERT_TO.update({ext: "mp4" for ext in
                    (".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".opus")})
+# Formats the user can ask for directly; both just keep the sound
+OUTPUTS = ("mp3", "wav")
 # The browser sends the file in pieces of this size. Cloudflare refuses
 # request bodies over 100 MB, so each piece stays well under that.
 UPLOAD_CHUNK = 32 * 1024 ** 2
@@ -523,6 +525,12 @@ class ConvertJob(Job):
         return ["-i", str(self.src), "-map", "0:a:0", "-vn", "-map_metadata", "0",
                 "-c:a", "libmp3lame", "-q:a", "0", "-id3v2_version", "3"]
 
+    def wav_command(self):
+        # 16-bit PCM, like a CD. `-rf64 auto` switches to RF64 past 4 GB,
+        # which a plain WAV header can't describe.
+        return ["-i", str(self.src), "-map", "0:a:0", "-vn", "-map_metadata", "0",
+                "-c:a", "pcm_s16le", "-rf64", "auto"]
+
     def mp4_command(self, streams, duration):
         """A still picture (the file's cover art, or black) with the sound."""
         picture = None
@@ -596,6 +604,7 @@ class ConvertJob(Job):
                 self.dest = self.out / f"{self.stem}.{self.container}"
             self.update(stage="Converting…")
             args = (self.mp3_command() if self.container == "mp3"
+                    else self.wav_command() if self.container == "wav"
                     else self.mp4_command(streams, duration))
             code, last_error = self.run_ffmpeg(args, duration)
         if self.cancelled:
@@ -845,13 +854,17 @@ def job_file(job_id):
 
 @app.post("/api/convert")
 def convert_create():
-    """Start an upload: {name, size} -> job id and the piece size to use."""
+    """Start an upload: {name, size, to?} -> job id and the piece size to use.
+    `to` is "mp3" or "wav" to take the sound out of any file; anything else
+    (or nothing) picks the output from the file itself."""
     data = request.get_json(silent=True) or {}
     # Just the file name, never a path
     name = str(data.get("name") or "").replace("\\", "/").rsplit("/", 1)[-1][-255:]
     size = data.get("size")
     # Every file type is accepted; unknown ones are sorted out after upload
     target = CONVERT_TO.get(Path(name).suffix.lower(), "auto")
+    if data.get("to") in OUTPUTS:
+        target = data["to"]
     if type(size) is not int or size <= 0:
         return jsonify(error="This file is empty."), 400
     make_room()
