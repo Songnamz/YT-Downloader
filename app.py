@@ -35,7 +35,7 @@ from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
 from datetime import timedelta
 
-from flask import (Flask, abort, jsonify, redirect, request, send_file,
+from flask import (Flask, Response, abort, jsonify, redirect, request, send_file,
                    send_from_directory, session)
 
 BASE = Path(__file__).resolve().parent
@@ -899,6 +899,89 @@ def convert_start(job_id):
     except UploadError as exc:
         return jsonify(error=str(exc)), exc.code
     return jsonify(job.public())
+
+
+def finished_conversions(ids) -> list[ConvertJob]:
+    with jobs_lock:
+        found = [jobs.get(str(i)) for i in ids]
+    return [j for j in dict.fromkeys(found) if isinstance(j, ConvertJob)
+            and j.state["status"] == "done" and j.result and j.result.is_file()]
+
+
+@app.post("/api/convert/keep")
+def convert_keep():
+    """{ids} -> which of them are still on the server. Each one found gets a
+    fresh JOB_TTL, so results are kept while the page is open (until the disk
+    runs low: make_room() still deletes the oldest first)."""
+    ids = (request.get_json(silent=True) or {}).get("ids") or []
+    alive = finished_conversions(ids if isinstance(ids, list) else [])
+    now = time.time()
+    for j in alive:
+        j.finished = now
+    return jsonify(alive=[j.id for j in alive])
+
+
+class _ZipSink:
+    """A write-only file for ZipFile; the bytes are handed on as they come."""
+    def __init__(self):
+        self.parts = []
+
+    def write(self, b):
+        self.parts.append(bytes(b))
+        return len(b)
+
+    def flush(self):
+        pass
+
+    def take(self) -> bytes:
+        data = b"".join(self.parts)
+        self.parts.clear()
+        return data
+
+
+@app.post("/api/convert/zip")
+def convert_zip():
+    """Form field ids=a,b,c -> one .zip of those converted files, streamed as it
+    is built (no copy on disk, no size limit). MP3/MP4 don't shrink, so the
+    files are stored, not compressed."""
+    ids = [i for i in (request.form.get("ids") or "").split(",") if i]
+    done = finished_conversions(ids)
+    if not done:
+        return jsonify(error="These files are no longer on the server."), 404
+    for j in done:
+        j.finished = time.time()
+    names, items = set(), []
+    for j in done:
+        name, n = j.result.name, 1
+        while name.lower() in names:      # same name twice: "song (2).mp3"
+            n += 1
+            name = f"{j.result.stem} ({n}){j.result.suffix}"
+        names.add(name.lower())
+        items.append((j.result, name))
+
+    def stream():
+        sink = _ZipSink()
+        with zipfile.ZipFile(sink, "w", zipfile.ZIP_STORED, allowZip64=True) as zf:
+            for path, name in items:
+                try:
+                    src = open(path, "rb")
+                except OSError:
+                    continue                  # deleted meanwhile: leave it out
+                with src:
+                    info = zipfile.ZipInfo.from_file(path, name)
+                    info.compress_type = zipfile.ZIP_STORED
+                    with zf.open(info, "w", force_zip64=True) as dst:
+                        while chunk := src.read(1024 * 1024):
+                            dst.write(chunk)
+                            if sink.parts:
+                                yield sink.take()
+                yield sink.take()
+        yield sink.take()
+
+    stamp = time.strftime("%Y-%m-%d %H.%M")
+    return Response(stream(), mimetype="application/zip", headers={
+        "Content-Disposition": f'attachment; filename="converted {stamp}.zip"',
+        "X-Accel-Buffering": "no", "Cache-Control": "no-store"})
 
 
 @app.get("/api/config")

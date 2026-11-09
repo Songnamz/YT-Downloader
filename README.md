@@ -62,6 +62,13 @@ Any other file type is accepted too (AVI, WMV, FLV, 3GP, TS, AMR, …, even no
 extension): after the upload the server looks inside it and makes an MP3 if it
 has a video picture, or an MP4 if it is sound only.
 
+Pick or drop as many files as you like: they're converted one after another,
+and each is saved as soon as it's ready. Turn off "Save each file as soon as
+it's converted" and press **Download all as zip** to get them in a single
+.zip instead (streamed as it's built, so it needs no extra disk space). While
+the page is open it keeps the converted files on the server; they're deleted
+`JOB_TTL_MINUTES` after it's closed.
+
 There is no size limit. The browser uploads the file in 32 MB pieces, so
 Cloudflare's 100 MB request limit doesn't apply, and a piece that fails
 because of a connection problem is sent again. The only limit is free disk space:

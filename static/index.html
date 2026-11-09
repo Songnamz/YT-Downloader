@@ -166,7 +166,9 @@
   }
   .queue .x { font-size: 16px; line-height: 1; }
   .queue li.active .x { visibility: hidden; }
-  .convrow .btns { display: flex; gap: 8px; }
+  .convrow .btns { display: flex; gap: 8px; flex-wrap: wrap; }
+  .conv-only .switch { margin-top: 12px; }
+  .queue li.gone .sv { opacity: .4; pointer-events: none; }
   .convrow { display: flex; gap: 12px; align-items: center; justify-content: space-between; margin-top: 14px; flex-wrap: wrap; }
   .convrow .to { color: var(--muted); font-size: 14px; }
   .convrow .to b { color: var(--text); }
@@ -280,10 +282,12 @@
         <input type="file" id="pick" hidden multiple>
       </label>
       <ul class="queue" id="queue"></ul>
+      <label class="switch"><input type="checkbox" id="autoSave" checked> Save each file as soon as it's converted</label>
       <div class="convrow">
         <div class="to" id="convTo">No files chosen</div>
         <div class="btns">
           <button type="button" id="clearQ" style="display:none">Clear list</button>
+          <button type="button" id="zipAll" style="display:none">Download all as zip</button>
           <button type="button" class="primary" id="convGo" disabled>Convert</button>
         </div>
       </div>
@@ -361,7 +365,8 @@
     <p><b>MP3 → MP4</b>: makes a video of the sound with the song's cover picture, or a black screen if it has none. Handy for apps that only accept videos.</p>
     <p>Other files work too: MOV, MKV and WEBM videos become MP3; M4A, WAV, FLAC and OGG audio become MP4.</p>
     <p>There's no limit on size or on the number of files. Pick or drop as many as you like; they're converted one after another, and you can add more while it runs. Keep this tab open until the last file has finished uploading.</p>
-    <p>Each converted file is saved automatically as soon as it's ready (your browser may ask once to allow several downloads). Both copies are deleted from the server a few minutes later.</p>
+    <p>Each converted file is saved automatically as soon as it's ready (your browser may ask once to allow several downloads). To get everything in one go instead, turn that off and press <b>Download all as zip</b> when the batch is done.</p>
+    <p>Converted files stay on the server while this page is open, and are deleted a few minutes after you close it.</p>
   </div>
   </div>
 
@@ -596,6 +601,7 @@ class Stop extends Error {}          // ends the batch (cancel, login needed)
 const ext = (name) => (name.match(/\.([^.]+)$/) || [, ""])[1].toLowerCase();
 const sleep = (ms) => new Promise(res => setTimeout(res, ms));
 function waiting() { return queue.filter(q => q.state === "waiting"); }
+function finishedIds() { return queue.filter(q => q.state === "done" && q.id).map(q => q.id); }
 function size(n) {
   const u = ["B", "KB", "MB", "GB", "TB"]; let i = 0;
   while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
@@ -612,6 +618,9 @@ function renderSummary() {
     ? `<b>${w.length}</b> file${w.length > 1 ? "s" : ""} to convert · <b>${size(total)}</b>`
     : queue.length ? "No files waiting" : "No files chosen";
   $("clearQ").style.display = queue.length && !batch ? "" : "none";
+  const ready = finishedIds().length;
+  $("zipAll").style.display = ready ? "" : "none";
+  $("zipAll").textContent = ready > 1 ? `Download all ${ready} as zip` : "Download as zip";
   if (!job && !batch) setBusy(false);
 }
 function addFiles(files) {
@@ -776,12 +785,14 @@ async function convertAll() {
     const label = `File ${ok + failed + 1} of ${ok + failed + waiting().length}`;
     try {
       const id = await convertOne(q, label);
-      ok++; q.state = "done"; rowStatus(q, "✓ Saved", "ok");
+      ok++; q.state = "done"; q.id = id;
+      rowStatus(q, $("autoSave").checked ? "✓ Saved" : "✓ Ready", "ok");
       const a = document.createElement("a");
       a.className = "btn sv"; a.href = `/api/jobs/${id}/file`; a.download = ""; a.textContent = "Save";
       a.title = "Save again (available for a few minutes)";
       q.el.querySelector(".x").replaceWith(a);
-      saveFile(id);
+      if ($("autoSave").checked) saveFile(id);
+      renderSummary();
     } catch (e) {
       if (e instanceof Stop) {
         q.state = "waiting"; rowStatus(q, "Cancelled");   // Convert again to retry
@@ -801,10 +812,54 @@ async function convertAll() {
   if (left) parts.push(`${left} not started`);
   if (cancelled) setStatus("Cancelled");
   else if (failed) setStatus(ok ? "Some files failed" : failText(), "err");
-  else setStatus(`✓  ${ok === 1 ? "File" : `All ${ok} files`} converted — saved to your device`, "ok");
+  else setStatus(`✓  ${ok === 1 ? "File" : `All ${ok} files`} converted` +
+                 ($("autoSave").checked ? " — saved to your device" : ""), "ok");
   $("file").textContent = parts.join(" · ") + (failed ? " — see the list for details" : "");
   setBusy(false); renderSummary();
 }
+try { if (localStorage.getItem("autoSave") === "0") $("autoSave").checked = false; } catch {}
+$("autoSave").onchange = () => {
+  try { localStorage.setItem("autoSave", $("autoSave").checked ? "1" : "0"); } catch {}
+};
+// Ask the server to keep the finished files; rows it no longer has are marked
+async function keepAlive() {
+  const ids = finishedIds();
+  if (!ids.length) return ids;
+  const d = await api("/api/convert/keep", { ids });
+  const alive = new Set(d.alive);
+  for (const q of queue) {
+    if (q.state === "done" && q.id && !alive.has(q.id)) {
+      q.state = "gone"; q.el.classList.add("gone");
+      rowStatus(q, "Deleted from the server", "err");
+    }
+  }
+  renderSummary();
+  return d.alive;
+}
+setInterval(() => keepAlive().catch(() => {}), 60 * 1000);
+$("zipAll").onclick = async () => {
+  let ids;
+  try { ids = await keepAlive(); } catch (e) { if (!(e instanceof Stop)) setStatus(e.message, "err"); return; }
+  if (!ids.length) {
+    setStatus("Nothing to zip", "err");
+    $("file").textContent = "The converted files are no longer on the server. Please convert them again.";
+    return;
+  }
+  // A real form post, so the browser streams the zip straight to disk.
+  // It targets a hidden frame, so an error can't take the user off the page.
+  let frame = $("zipFrame");
+  if (!frame) {
+    frame = document.createElement("iframe");
+    frame.id = frame.name = "zipFrame"; frame.hidden = true;
+    document.body.appendChild(frame);
+  }
+  const f = document.createElement("form");
+  f.method = "POST"; f.action = "/api/convert/zip"; f.target = "zipFrame";
+  const inp = document.createElement("input");
+  inp.type = "hidden"; inp.name = "ids"; inp.value = ids.join(",");
+  f.appendChild(inp); document.body.appendChild(f); f.submit(); f.remove();
+  setStatus(`✓  Zipping ${ids.length} file${ids.length > 1 ? "s" : ""} — saving to your device`, "ok");
+};
 convGo.onclick = () => {
   if (!batch) return convertAll();
   batch.cancelled = true;
