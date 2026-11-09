@@ -7,12 +7,17 @@ for progress, then fetches the finished file (or a zip for playlists).
   https://<this-host>/https://www.youtube.com/watch?v=ID   (prepend host)
   https://<this-host>/watch?v=ID                            (YouTube-shaped path)
   https://<this-host>/https://www.dailymotion.com/video/ID  (any site yt-dlp supports)
+
+Converter: the browser uploads a local file in chunks (so no single request
+hits a proxy's size limit), ffmpeg converts it (video -> MP3, audio -> MP4)
+and the browser fetches the result like a finished download.
 """
 
 import errno
 import hashlib
 import hmac
 import ipaddress
+import json
 import secrets
 import os
 import re
@@ -413,6 +418,187 @@ class Job:
             self.update(status="cancelled", stage="Cancelled")
 
 
+# --------------------------------------------------------------------------- #
+# Converter: upload a local file, convert it with ffmpeg
+# --------------------------------------------------------------------------- #
+# Input extension -> output format: video in gives MP3, audio in gives MP4
+CONVERT_TO = {ext: "mp3" for ext in (".mp4", ".m4v", ".mov", ".mkv", ".webm")}
+CONVERT_TO.update({ext: "mp4" for ext in
+                   (".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".opus")})
+# The browser sends the file in pieces of this size. Cloudflare refuses
+# request bodies over 100 MB, so each piece stays well under that.
+UPLOAD_CHUNK = 32 * 1024 ** 2
+UPLOAD_IDLE = 30 * 60      # an upload that sends nothing for this long is dropped
+BAD_NAME_RE = re.compile(r'[\x00-\x1f\x7f/\\:*?"<>|]+')
+
+
+class UploadError(Exception):
+    def __init__(self, msg, code=400):
+        super().__init__(msg)
+        self.code = code
+
+
+def ffprobe(path) -> dict:
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-print_format", "json",
+             "-show_format", "-show_streams", str(path)],
+            capture_output=True, text=True, timeout=120).stdout
+        return json.loads(out or "{}")
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return {}
+
+
+def clock(seconds: float) -> str:
+    seconds = int(seconds)
+    h, m, s = seconds // 3600, seconds // 60 % 60, seconds % 60
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+
+
+class ConvertJob(Job):
+    def __init__(self, name, size, target):
+        super().__init__("", None, target, False)
+        self.size = size
+        self.received = 0
+        self.touched = time.time()
+        self.upload_lock = threading.Lock()
+        self.src = self.dir / ("input" + Path(name).suffix.lower())
+        stem = BAD_NAME_RE.sub("_", Path(name).stem).strip(" ._")[:150] or "converted"
+        self.dest = self.out / f"{stem}.{target}"
+        self.out.mkdir(parents=True, exist_ok=True)
+        self.update(status="uploading", stage="Uploading…", file=name)
+
+    # -- upload ---------------------------------------------------------------
+    def write(self, offset, stream) -> int:
+        """Write one piece at `offset`. A piece may be sent again (after a
+        network error), so anything already stored past `offset` is replaced."""
+        with self.upload_lock:
+            if self.state["status"] != "uploading":
+                raise UploadError("This upload was cancelled or has expired.", 410)
+            if not 0 <= offset <= self.received:
+                raise UploadError("Upload out of order. Please try again.", 409)
+            n = offset
+            try:
+                with open(self.src, "r+b" if self.src.exists() else "wb") as f:
+                    f.seek(offset)
+                    f.truncate()
+                    while chunk := stream.read(1024 * 1024):
+                        n += len(chunk)
+                        if n > self.size:
+                            raise UploadError("The file is bigger than announced.")
+                        if self.cancelled:
+                            raise UploadError("Cancelled.", 410)
+                        f.write(chunk)
+                        self.touched = time.time()
+            finally:
+                self.received = min(n, self.size)
+            return self.received
+
+    def start(self):
+        with self.upload_lock:
+            if self.state["status"] != "uploading":
+                raise UploadError("This upload was cancelled or has expired.", 410)
+            if self.received != self.size:
+                raise UploadError("The upload is incomplete. Please try again.")
+            self.update(status="queued", stage="Waiting for a free slot…", percent=0)
+        threading.Thread(target=self.run, daemon=True).start()
+
+    def cancel(self):
+        super().cancel()
+        with self.upload_lock:
+            if self.state["status"] == "uploading":
+                self.update(status="cancelled", stage="Cancelled")
+                self.finished = time.time()
+                shutil.rmtree(self.dir, ignore_errors=True)
+
+    # -- conversion ---------------------------------------------------------
+    def fail(self, msg):
+        self.update(status="error", stage="Conversion failed", error=msg)
+
+    def mp3_command(self):
+        return ["-i", str(self.src), "-map", "0:a:0", "-vn", "-map_metadata", "0",
+                "-c:a", "libmp3lame", "-q:a", "0", "-id3v2_version", "3"]
+
+    def mp4_command(self, streams, duration):
+        """A still picture (the file's cover art, or black) with the sound."""
+        picture = None
+        cover = next((s for s in streams if s.get("codec_type") == "video"
+                      and s.get("disposition", {}).get("attached_pic")), None)
+        if cover is not None:
+            png = self.dir / "cover.png"
+            subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(self.src),
+                            "-map", f"0:{cover['index']}", "-frames:v", "1", str(png)],
+                           capture_output=True, timeout=120)
+            picture = png if png.is_file() else None
+        video_in = (["-loop", "1", "-framerate", "1", "-i", str(picture)] if picture
+                    else ["-f", "lavfi", "-i", "color=c=black:s=1280x720:r=1"])
+        cmd = video_in + [
+            "-i", str(self.src), "-map", "0:v:0", "-map", "1:a:0", "-map_metadata", "1",
+            # Even width and height (needed by H.264), at most 1920 wide
+            "-vf", "scale='min(1920,trunc(iw/2)*2)':-2,format=yuv420p",
+            "-c:v", "libx264", "-preset", "veryfast", "-tune", "stillimage", "-r", "1",
+            "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart"]
+        if duration:
+            cmd += ["-t", f"{duration:.3f}"]
+        return cmd
+
+    def run_ffmpeg(self, args, duration):
+        cmd = ["ffmpeg", "-nostdin", "-hide_banner", "-y", "-loglevel", "error",
+               "-progress", "pipe:1", "-nostats", *args, str(self.dest)]
+        proc = self.spawn(cmd)
+        last_error, pos = "", 0.0
+        for line in proc.stdout:
+            line = line.strip()
+            key, eq, value = line.partition("=")
+            if eq and " " not in key:        # a -progress field
+                if key == "out_time_us" and value.isdigit():
+                    pos = int(value) / 1e6
+                    if duration:
+                        self.update(status="running", stage="Converting…",
+                                    percent=min(99.9, pos / duration * 100))
+                elif key == "speed" and value.strip().endswith("x"):
+                    try:
+                        factor = float(value.strip()[:-1])
+                    except ValueError:
+                        continue
+                    eta = clock((duration - pos) / factor) if duration and factor > 0 else ""
+                    self.update(speed=f"{factor:g}× real time", eta=eta)
+                continue
+            if line:
+                self.log(line)
+                last_error = line
+        return self.reap(proc), last_error
+
+    def _run(self):
+        with slots:
+            if self.cancelled:
+                return
+            self.update(status="processing", stage="Reading file…", percent=0)
+            info = ffprobe(self.src)
+            streams = info.get("streams", [])
+            if not info.get("format"):
+                return self.fail("This file can't be read. Is it really a video or audio file?")
+            if not any(s.get("codec_type") == "audio" for s in streams):
+                return self.fail("This file has no sound to convert.")
+            try:
+                duration = float(info["format"].get("duration") or 0)
+            except ValueError:
+                duration = 0.0
+            self.update(stage="Converting…")
+            args = (self.mp3_command() if self.container == "mp3"
+                    else self.mp4_command(streams, duration))
+            code, last_error = self.run_ffmpeg(args, duration)
+        if self.cancelled:
+            self.update(status="cancelled", stage="Cancelled")
+            return
+        if code != 0 or not self.dest.is_file():
+            return self.fail(last_error or f"ffmpeg exited with code {code}")
+        self.src.unlink(missing_ok=True)       # keep only the result on disk
+        self.result = self.dest
+        self.update(status="done", stage="Ready", percent=100, speed="", eta="",
+                    file=self.result.name)
+
+
 def kill(proc):
     if proc.poll() is None:
         try:
@@ -452,7 +638,13 @@ def janitor():
                    if j.finished is not None and j.finished < cutoff]
             for j in old:
                 jobs.pop(j.id, None)
-        for j in old:
+            # Uploads the browser gave up on (tab closed, connection lost)
+            idle = time.time() - UPLOAD_IDLE
+            stale = [j for j in jobs.values() if isinstance(j, ConvertJob)
+                     and j.state["status"] == "uploading" and j.touched < idle]
+            for j in stale:
+                jobs.pop(j.id, None)
+        for j in old + stale:
             j.cancel()
             shutil.rmtree(j.dir, ignore_errors=True)
         # Leftovers from a previous container run
@@ -639,6 +831,65 @@ def job_file(job_id):
     if job.state["status"] != "done" or not job.result or not job.result.is_file():
         abort(404)
     return send_file(job.result, as_attachment=True, download_name=job.result.name)
+
+
+@app.post("/api/convert")
+def convert_create():
+    """Start an upload: {name, size} -> job id and the piece size to use."""
+    data = request.get_json(silent=True) or {}
+    # Just the file name, never a path
+    name = str(data.get("name") or "").replace("\\", "/").rsplit("/", 1)[-1][-255:]
+    size = data.get("size")
+    target = CONVERT_TO.get(Path(name).suffix.lower())
+    if not target:
+        return jsonify(error="Choose an MP4 video or an MP3 audio file."), 400
+    if type(size) is not int or size <= 0:
+        return jsonify(error="This file is empty."), 400
+    make_room()
+    if free_bytes() - size < MIN_FREE:
+        return jsonify(error="The server doesn't have enough free disk space for "
+                             "this file right now. Try again later."), 507
+    job = ConvertJob(name, size, target)
+    with jobs_lock:
+        jobs[job.id] = job
+    return jsonify(job.public() | {"chunk": UPLOAD_CHUNK}), 201
+
+
+def get_convert_job(job_id) -> ConvertJob:
+    job = get_job(job_id)
+    if not isinstance(job, ConvertJob):
+        abort(404)
+    return job
+
+
+@app.put("/api/convert/<job_id>")
+def convert_upload(job_id):
+    """One piece of the file, as the raw request body, at ?offset=N."""
+    job = get_convert_job(job_id)
+    try:
+        offset = int(request.args.get("offset", ""))
+    except ValueError:
+        return jsonify(error="Missing offset."), 400
+    try:
+        received = job.write(offset, request.stream)
+    except UploadError as exc:
+        return jsonify(error=str(exc), received=job.received), exc.code
+    except OSError as exc:
+        if exc.errno != errno.ENOSPC:
+            raise
+        job.cancel()
+        return jsonify(error=DISK_FULL_MSG), 507
+    return jsonify(received=received)
+
+
+@app.post("/api/convert/<job_id>/start")
+def convert_start(job_id):
+    job = get_convert_job(job_id)
+    try:
+        job.start()
+    except UploadError as exc:
+        return jsonify(error=str(exc)), exc.code
+    return jsonify(job.public())
 
 
 @app.get("/api/config")

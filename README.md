@@ -49,6 +49,23 @@ metadata), so the app can't be used to reach machines on your network. Set
 > "youtube" can get trademark complaints, which is why the default setup uses
 > your own domain instead.
 
+## Converter
+
+The **Converter** menu converts files from your own device:
+
+- **MP4 → MP3**: keeps only the sound (best MP3 quality, tags kept).
+- **MP3 → MP4**: a video of the song's cover picture (or a black screen if it
+  has none) with the sound, e.g. for apps that only accept videos.
+
+MOV/MKV/WEBM videos also become MP3, and M4A/WAV/FLAC/OGG audio becomes MP4.
+
+There is no size limit. The browser uploads the file in 32 MB pieces, so
+Cloudflare's 100 MB request limit doesn't apply, and a piece that fails
+because of a connection problem is sent again. The only limit is free disk space:
+an upload is refused if it would leave less than `MIN_FREE_GB` free. An
+upload that stops sending for 30 minutes (for example, because the tab was closed) is deleted. Converted
+files are deleted after `JOB_TTL_MINUTES`, like downloads.
+
 ## Login
 
 The app asks for a password before anything else (the shortcut and bookmarklet
@@ -110,7 +127,7 @@ python app.py            # http://localhost:8000
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `MAX_CONCURRENT` | 2 | downloads running at once (others wait in a queue) |
+| `MAX_CONCURRENT` | 2 | downloads and conversions running at once (others wait in a queue) |
 | `JOB_TTL_MINUTES` | 60 | finished files are deleted after this |
 | `MIN_FREE_GB` | 5 | keep this much disk free: oldest finished files are deleted early, new downloads refused if still short |
 | `MAX_HEIGHT` | 2160 | resolution cap |

@@ -135,7 +135,25 @@
   .tabs button { height: 38px; font-size: 14px; gap: 8px; }
   .tabs button svg { width: 16px; height: 16px; flex: none; }
   .tabs button.on svg { color: var(--accent); }
-  [data-site="yt"] .any-only, [data-site="any"] .yt-only { display: none !important; }
+  [data-site="yt"] .any-only, [data-site="any"] .yt-only,
+  [data-site="conv"] .yt-only, [data-site="conv"] .any-only, [data-site="conv"] .dl-only,
+  [data-site="yt"] .conv-only, [data-site="any"] .conv-only { display: none !important; }
+  .drop {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+    min-height: 150px; padding: 20px; border-radius: 16px; text-align: center; cursor: pointer;
+    border: 1.5px dashed color-mix(in srgb, var(--muted) 50%, transparent); background: var(--field);
+    transition: border-color .15s, background .15s;
+  }
+  .drop:hover, .drop.over, .drop:focus-visible {
+    border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, var(--field)); outline: none;
+  }
+  .drop svg { width: 30px; height: 30px; color: var(--accent); }
+  .drop b { font-size: 15px; }
+  .drop span { color: var(--muted); font-size: 13px; }
+  #picked { font-weight: 600; word-break: break-word; }
+  .convrow { display: flex; gap: 12px; align-items: center; justify-content: space-between; margin-top: 14px; flex-wrap: wrap; }
+  .convrow .to { color: var(--muted); font-size: 14px; }
+  .convrow .to b { color: var(--text); }
   .sites { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
   .sites span {
     font-size: 12px; padding: 2px 10px; border-radius: 999px; background: var(--code);
@@ -235,7 +253,22 @@
     <div class="seg tabs" id="site" role="tablist" aria-label="Where the video is from">
       <button type="button" role="tab" data-v="yt"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M23 7.2a3 3 0 0 0-2.1-2.1C19 4.6 12 4.6 12 4.6s-7 0-8.9.5A3 3 0 0 0 1 7.2 31 31 0 0 0 .5 12a31 31 0 0 0 .5 4.8 3 3 0 0 0 2.1 2.1c1.9.5 8.9.5 8.9.5s7 0 8.9-.5a3 3 0 0 0 2.1-2.1 31 31 0 0 0 .5-4.8 31 31 0 0 0-.5-4.8zM9.8 15V9l5.8 3-5.8 3z"/></svg>YouTube</button>
       <button type="button" role="tab" data-v="any"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/></svg>Other sites</button>
+      <button type="button" role="tab" data-v="conv"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3l4 4-4 4"/><path d="M3 11V9a2 2 0 0 1 2-2h16"/><path d="M7 21l-4-4 4-4"/><path d="M21 13v2a2 2 0 0 1-2 2H3"/></svg>Converter</button>
     </div>
+    <div class="conv-only">
+      <label class="h" for="pick">File from your device</label>
+      <label class="drop" id="drop" tabindex="0">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4m0 0-4.5 4.5M12 4l4.5 4.5M5 20h14"/></svg>
+        <b id="picked">Choose a file or drop it here</b>
+        <span id="pickHint">MP4 video → MP3 audio, or MP3 audio → MP4 video. Any size.</span>
+        <input type="file" id="pick" hidden accept=".mp4,.m4v,.mov,.mkv,.webm,.mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,video/*,audio/*">
+      </label>
+      <div class="convrow">
+        <div class="to" id="convTo">Converts to: <b>—</b></div>
+        <button type="button" class="primary" id="convGo" disabled>Convert</button>
+      </div>
+    </div>
+    <div class="dl-only">
     <label class="h" for="url" id="urlLabel">Video or playlist URL</label>
     <div class="row">
       <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5"/></svg>
@@ -261,6 +294,7 @@
       <div class="seg" id="format"><button type="button" data-v="mp4">MP4</button><button type="button" data-v="mkv">MKV</button><button type="button" data-v="mp3" title="Audio only">MP3</button></div>
     </div>
     <label class="switch"><input type="checkbox" id="playlist"> Download whole playlist (sent as a .zip)</label>
+    </div>
     </div>
   </form>
 
@@ -299,6 +333,14 @@
     <p>Or drag this button to your bookmarks bar and click it on the page with the video:
       <a class="btn bm" href="#" title="Drag me to your bookmarks bar">⬇ Download video</a></p>
     <p>Videos behind a login, or protected with DRM (Netflix, Disney+, Spotify and similar), can't be downloaded.</p>
+  </div>
+
+  <div class="card tips conv-only">
+    <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3l4 4-4 4"/><path d="M3 11V9a2 2 0 0 1 2-2h16"/><path d="M7 21l-4-4 4-4"/><path d="M21 13v2a2 2 0 0 1-2 2H3"/></svg>Convert your own files</h2>
+    <p><b>MP4 → MP3</b>: keeps only the sound, at the best MP3 quality.</p>
+    <p><b>MP3 → MP4</b>: makes a video of the sound with the song's cover picture, or a black screen if it has none. Handy for apps that only accept videos.</p>
+    <p>Other files work too: MOV, MKV and WEBM videos become MP3; M4A, WAV, FLAC and OGG audio become MP4.</p>
+    <p>There's no size limit. Keep this tab open until the file has finished uploading. The converted file is saved automatically, and both copies are deleted from the server a few minutes later.</p>
   </div>
   </div>
 
@@ -358,7 +400,7 @@ document.querySelectorAll(".bm").forEach(b => {
 // ---- menu: YouTube / Other sites ---------------------------------------
 const YT_HOSTS = ["youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com",
                   "youtu.be", "www.youtube-nocookie.com"];
-let site = "yt";
+let site = "yt", anySite = true;
 function isYouTube(u) {
   try { return YT_HOSTS.includes(new URL(u.startsWith("http") ? u : "https://" + u).hostname); }
   catch { return true; }
@@ -370,11 +412,17 @@ function setSite(v) {
     b.classList.toggle("on", b.dataset.v === v);
     b.setAttribute("aria-selected", b.dataset.v === v);
   });
-  $("urlLabel").textContent = v === "yt" ? "Video or playlist URL" : "Link to the page with the video";
-  $("url").placeholder = v === "yt" ? "https://www.youtube.com/watch?v=…" : "https://www.dailymotion.com/video/…";
+  if (v !== "conv") {
+    $("urlLabel").textContent = v === "yt" ? "Video or playlist URL" : "Link to the page with the video";
+    $("url").placeholder = v === "yt" ? "https://www.youtube.com/watch?v=…" : "https://www.dailymotion.com/video/…";
+  }
+  if (!job && $("status").textContent === "Ready")
+    $("file").textContent = v === "conv" ? "Choose a file and press Convert" : "Paste a link and press Download";
   store.set("site", v);
 }
-document.querySelectorAll("#site button").forEach(b => b.onclick = () => { setSite(b.dataset.v); $("url").focus(); });
+document.querySelectorAll("#site button").forEach(b => b.onclick = () => {
+  setSite(b.dataset.v); if (b.dataset.v !== "conv") $("url").focus();
+});
 setSite(store.get("site", "yt"));
 // Hide the menu if the server only allows YouTube
 // Logged out (login expired or password changed): go to the login page
@@ -382,15 +430,20 @@ function toLogin() { location.href = "/login"; }
 fetch("/api/config").then(r => {
   if (r.status === 401) return toLogin();
   return r.json().then(c => {
-    if (!c.any_site) { $("site").style.display = "none"; setSite("yt"); }
+    if (!c.any_site) {
+      anySite = false;
+      document.querySelector('#site [data-v="any"]').style.display = "none";
+      if (site === "any") setSite("yt");
+    }
     if (c.login) { $("logout").hidden = false; $("logoutSep").hidden = false; }
   });
 }).catch(() => {});
 $("year").textContent = new Date().getFullYear();
 
 // ---- download flow ------------------------------------------------------
-let job = null, timer = null;
-const bar = $("bar"), go = $("go");
+let job = null, timer = null, mode = "download", upload = null;
+const bar = $("bar"), go = $("go"), convGo = $("convGo");
+const failText = () => mode === "convert" ? "Conversion failed" : "Download failed";
 
 function videoId(u) {
   try {
@@ -403,9 +456,14 @@ function videoId(u) {
 }
 function setStatus(text, cls) { $("status").textContent = text; $("status").className = cls || ""; }
 function setBusy(b) {
-  go.textContent = b ? "Cancel" : "Download";
-  go.className = b ? "danger" : "primary";
-  go.type = b ? "button" : "submit";
+  const busyBtn = mode === "convert" ? convGo : go;
+  go.textContent = b && busyBtn === go ? "Cancel" : "Download";
+  go.className = b && busyBtn === go ? "danger" : "primary";
+  go.type = b && busyBtn === go ? "button" : "submit";
+  go.disabled = b && busyBtn !== go;
+  convGo.textContent = b && busyBtn === convGo ? "Cancel" : "Convert";
+  convGo.className = b && busyBtn === convGo ? "danger" : "primary";
+  convGo.disabled = b ? busyBtn !== convGo : !picked;
 }
 function triggerSave(id) {
   const href = `/api/jobs/${id}/file`;
@@ -418,8 +476,10 @@ async function start(url) {
   if (job) return;
   url = url.trim();
   if (!url) return;
+  mode = "download";
   const yt = isYouTube(url);
-  if ((site === "yt") !== yt && $("site").style.display !== "none") setSite(yt ? "yt" : "any");
+  const want = yt || !anySite ? "yt" : "any";
+  if (site !== want) setSite(want);
   const id = yt ? videoId(url) : null;
   $("thumb").classList.toggle("show", !!id);
   if (id) $("thumb").style.backgroundImage = `url(https://i.ytimg.com/vi/${id}/mqdefault.jpg)`;
@@ -440,7 +500,7 @@ async function start(url) {
     job = d.id; setBusy(true); poll();
   } catch (e) {
     bar.classList.remove("indet");
-    setStatus("Download failed", "err"); $("file").textContent = e.message;
+    setStatus(failText(), "err"); $("file").textContent = e.message;
   }
 }
 
@@ -453,8 +513,9 @@ async function poll() {
     if (r.status === 404) {
       // The server forgot this job (restart or cleanup): retrying won't help
       finish(); bar.firstElementChild.style.width = "0";
-      setStatus("Download failed", "err");
-      $("file").textContent = "The server restarted and lost this download. Please try again.";
+      setStatus(failText(), "err");
+      $("file").textContent = "The server restarted and lost this " +
+        (mode === "convert" ? "file" : "download") + ". Please try again.";
       return;
     }
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -482,7 +543,7 @@ async function poll() {
   }
   if (s.status === "error") {
     finish(); bar.firstElementChild.style.width = "0";
-    setStatus("Download failed", "err"); $("file").textContent = s.error; $("logbox").open = true;
+    setStatus(failText(), "err"); $("file").textContent = s.error; $("logbox").open = true;
     return;
   }
   if (s.status === "cancelled") {
@@ -490,7 +551,10 @@ async function poll() {
   }
   timer = setTimeout(poll, 700);
 }
-function finish() { job = null; clearTimeout(timer); setBusy(false); bar.classList.remove("indet"); $("speed").textContent = ""; }
+function finish() {
+  job = null; upload = null; clearTimeout(timer); setBusy(false);
+  bar.classList.remove("indet"); $("speed").textContent = "";
+}
 
 $("form").onsubmit = (e) => { e.preventDefault(); start($("url").value); };
 go.onclick = (e) => {
@@ -499,6 +563,154 @@ go.onclick = (e) => {
   fetch(`/api/jobs/${job}/cancel`, { method: "POST" });
   setStatus("Cancelling…");
 };
+// ---- converter: pick a file, upload it in pieces, then convert ----------
+const CONVERT_TO = {};
+["mp4", "m4v", "mov", "mkv", "webm"].forEach(e => CONVERT_TO[e] = "mp3");
+["mp3", "m4a", "aac", "wav", "flac", "ogg", "opus"].forEach(e => CONVERT_TO[e] = "mp4");
+let picked = null;
+const ext = (name) => (name.match(/\.([^.]+)$/) || [, ""])[1].toLowerCase();
+function size(n) {
+  const u = ["B", "KB", "MB", "GB", "TB"]; let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (i ? n.toFixed(1) : n) + " " + u[i];
+}
+function pickFile(f) {
+  if (!f) return;
+  const to = CONVERT_TO[ext(f.name)];
+  if (!to) {
+    picked = null;
+    $("picked").textContent = f.name;
+    $("pickHint").textContent = "This file type can't be converted. Choose an MP4 or MP3 file.";
+    $("pickHint").className = "err";
+    $("convTo").innerHTML = "Converts to: <b>—</b>";
+  } else {
+    picked = f;
+    $("picked").textContent = f.name;
+    $("pickHint").textContent = size(f.size) + " · click to choose another file";
+    $("pickHint").className = "";
+    $("convTo").innerHTML = `Converts to: <b>${to.toUpperCase()}</b>`;
+  }
+  if (!job) setBusy(false);
+}
+const drop = $("drop"), pick = $("pick");
+pick.onchange = () => { pickFile(pick.files[0]); pick.value = ""; };
+drop.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick.click(); } };
+drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = (e) => {
+  e.preventDefault(); drop.classList.remove("over");
+  if (!job) pickFile(e.dataTransfer.files[0]);
+};
+// Dropping a file anywhere else would make the browser open it and leave the app
+window.addEventListener("dragover", (e) => e.preventDefault());
+window.addEventListener("drop", (e) => {
+  e.preventDefault();
+  if (site === "conv" && !job) pickFile(e.dataTransfer.files[0]);
+});
+
+class HttpError extends Error { constructor(msg, status) { super(msg); this.status = status; } }
+function sendPiece(id, blob, offset, onProgress) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    upload = x;
+    x.open("PUT", `/api/convert/${id}?offset=${offset}`);
+    x.setRequestHeader("Content-Type", "application/octet-stream");
+    x.upload.onprogress = (e) => onProgress(e.loaded);
+    x.onload = () => {
+      let d = {};
+      try { d = JSON.parse(x.responseText); } catch {}
+      if (x.status === 200) resolve(d.received);
+      else reject(new HttpError(d.error || `HTTP ${x.status}`, x.status));
+    };
+    x.onerror = () => reject(new HttpError("Network error", 0));
+    x.onabort = () => reject(new HttpError("Cancelled", -1));
+    x.send(blob);
+  });
+}
+
+async function convert() {
+  if (job || !picked) return;
+  const file = picked;
+  mode = "convert";
+  $("thumb").classList.remove("show");
+  $("save").style.display = "none";
+  $("pct").textContent = ""; $("speed").textContent = ""; $("log").textContent = "";
+  $("file").textContent = file.name;
+  bar.classList.add("indet"); bar.firstElementChild.style.width = "";
+  setStatus("Starting…");
+  let id = null;
+  try {
+    let r = await fetch("/api/convert", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: file.name, size: file.size }),
+    });
+    if (r.status === 401) return toLogin();
+    let d = await r.json();
+    if (!r.ok) throw new Error(d.error || "Request failed");
+    job = id = d.id; setBusy(true);
+    const piece = d.chunk, t0 = performance.now();
+    bar.classList.remove("indet");
+    let offset = 0, tries = 0;
+    while (offset < file.size) {
+      const showProgress = (loaded) => {
+        const done = Math.min(file.size, offset + loaded);
+        const pct = done / file.size * 100;
+        bar.firstElementChild.style.width = pct + "%";
+        $("pct").textContent = Math.floor(pct) + "%";
+        const secs = (performance.now() - t0) / 1000, bps = done / secs;
+        const left = bps > 0 ? (file.size - done) / bps : 0;
+        $("speed").textContent = secs > 1
+          ? `${size(done)} of ${size(file.size)}   •   ${size(bps)}/s   •   ${
+              Math.floor(left / 60)}:${String(Math.floor(left % 60)).padStart(2, "0")} remaining`
+          : `${size(done)} of ${size(file.size)}`;
+      };
+      setStatus("Uploading to server…");
+      try {
+        offset = await sendPiece(id, file.slice(offset, offset + piece), offset, showProgress);
+        tries = 0;
+      } catch (e) {
+        if (job !== id) return;                          // cancelled by the user
+        if (e.status === 401) return toLogin();
+        if (e.status === 0 || e.status >= 500 && e.status !== 507) {
+          if (++tries > 5) throw new Error("The upload keeps failing. Check your connection and try again.");
+          setStatus(`Connection problem, retrying (${tries} of 5)…`);
+          await new Promise(res => setTimeout(res, 2000 * tries));
+          if (job !== id) return;
+          continue;                                      // send the same piece again
+        }
+        throw e;
+      }
+    }
+    upload = null;
+    if (job !== id) return;
+    r = await fetch(`/api/convert/${id}/start`, { method: "POST" });
+    if (r.status === 401) return toLogin();
+    d = await r.json();
+    if (!r.ok) throw new Error(d.error || "Request failed");
+    $("pct").textContent = ""; $("speed").textContent = "";
+    bar.firstElementChild.style.width = "0";
+    poll();
+  } catch (e) {
+    if (id && job !== id) return;                      // cancelled meanwhile
+    if (job) fetch(`/api/jobs/${job}/cancel`, { method: "POST" });
+    finish(); bar.firstElementChild.style.width = "0"; $("pct").textContent = "";
+    setStatus(failText(), "err"); $("file").textContent = e.message;
+  }
+}
+convGo.onclick = () => {
+  if (!job) return convert();
+  if (upload) {
+    upload.abort();
+    fetch(`/api/jobs/${job}/cancel`, { method: "POST" });
+    finish(); bar.firstElementChild.style.width = "0"; $("pct").textContent = "";
+    setStatus("Cancelled");
+    return;
+  }
+  fetch(`/api/jobs/${job}/cancel`, { method: "POST" });
+  setStatus("Cancelling…");
+};
+window.addEventListener("beforeunload", (e) => { if (upload) e.preventDefault(); });
+
 $("paste").onclick = async () => {
   try { $("url").value = (await navigator.clipboard.readText()).trim(); } catch { $("url").focus(); }
 };
