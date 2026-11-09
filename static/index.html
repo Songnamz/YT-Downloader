@@ -375,6 +375,10 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
+// Shared state, declared first: setSite() and setBusy() read it while the
+// page is still starting up (a `let` used before its line throws)
+let job = null, timer = null, mode = "download", upload = null;
+let queue = [], batch = null;   // converter: picked files, running batch
 const store = {
   get(k, d) { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, v); } catch {} },
@@ -467,7 +471,6 @@ fetch("/api/config").then(r => {
 $("year").textContent = new Date().getFullYear();
 
 // ---- download flow ------------------------------------------------------
-let job = null, timer = null, mode = "download", upload = null;
 const bar = $("bar"), go = $("go"), convGo = $("convGo");
 const failText = () => mode === "convert" ? "Conversion failed" : "Download failed";
 
@@ -596,7 +599,6 @@ const CONVERT_TO = {};
 ["mp4", "m4v", "mov", "mkv", "webm"].forEach(e => CONVERT_TO[e] = "mp3");
 ["mp3", "m4a", "aac", "wav", "flac", "ogg", "opus"].forEach(e => CONVERT_TO[e] = "mp4");
 // Files picked so far: {file, el, state: waiting|active|done|error}
-let queue = [], batch = null;
 class Stop extends Error {}          // ends the batch (cancel, login needed)
 const ext = (name) => (name.match(/\.([^.]+)$/) || [, ""])[1].toLowerCase();
 const sleep = (ms) => new Promise(res => setTimeout(res, ms));
