@@ -112,6 +112,7 @@ python app.py            # http://localhost:8000
 |---|---|---|
 | `MAX_CONCURRENT` | 2 | downloads running at once (others wait in a queue) |
 | `JOB_TTL_MINUTES` | 60 | finished files are deleted after this |
+| `MIN_FREE_GB` | 5 | keep this much disk free: oldest finished files are deleted early, new downloads refused if still short |
 | `MAX_HEIGHT` | 2160 | resolution cap |
 | `CONCURRENT_FRAGMENTS` | 8 | parallel connections per download (1 = off) |
 | `PLAYLIST_PARALLEL` | 3 | playlist videos downloaded at the same time |

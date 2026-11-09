@@ -9,6 +9,7 @@ for progress, then fetches the finished file (or a zip for playlists).
   https://<this-host>/https://www.dailymotion.com/video/ID  (any site yt-dlp supports)
 """
 
+import errno
 import hashlib
 import hmac
 import ipaddress
@@ -37,6 +38,11 @@ JOBS_DIR = Path(os.environ.get("JOBS_DIR", BASE / "jobs"))
 COOKIES = os.environ.get("COOKIES_FILE", "/data/cookies.txt")
 MAX_CONCURRENT = int(os.environ.get("MAX_CONCURRENT", "2"))
 JOB_TTL = int(os.environ.get("JOB_TTL_MINUTES", "60")) * 60
+# Keep at least this much disk free: old finished files are deleted early
+# to make room, and new downloads are refused if that is not enough.
+MIN_FREE = float(os.environ.get("MIN_FREE_GB", "5")) * 1024 ** 3
+DISK_FULL_MSG = ("The server is out of disk space. Download your finished "
+                 "files, then try again in a few minutes.")
 MAX_HEIGHT = int(os.environ.get("MAX_HEIGHT", "2160"))
 # Parallel fragment downloads (HLS/DASH). Same file, same quality, just faster.
 FRAGMENTS = max(1, int(os.environ.get("CONCURRENT_FRAGMENTS", "8")))
@@ -353,9 +359,14 @@ class Job:
         try:
             self._run()
         except Exception as exc:  # noqa: BLE001 - never leave a job stuck "running"
-            self.update(status="error", stage="Download failed", error=str(exc))
+            msg = (DISK_FULL_MSG if getattr(exc, "errno", None) == errno.ENOSPC
+                   else str(exc))
+            self.update(status="error", stage="Download failed", error=msg)
         finally:
             self.finished = time.time()
+            if self.state["status"] in ("error", "cancelled"):
+                # Nothing to hand out: free the partial files right away
+                shutil.rmtree(self.dir, ignore_errors=True)
 
     def _run(self):
         self.out.mkdir(parents=True, exist_ok=True)
@@ -410,6 +421,26 @@ def kill(proc):
             pass
 
 
+def free_bytes() -> float:
+    try:
+        return shutil.disk_usage(JOBS_DIR if JOBS_DIR.is_dir() else JOBS_DIR.parent).free
+    except OSError:
+        return float("inf")
+
+
+def make_room():
+    """Delete the oldest finished jobs until MIN_FREE bytes are free."""
+    while free_bytes() < MIN_FREE:
+        with jobs_lock:
+            finished = [j for j in jobs.values() if j.finished is not None]
+            if not finished:
+                return
+            oldest = min(finished, key=lambda j: j.finished)
+            jobs.pop(oldest.id, None)
+        oldest.cancel()
+        shutil.rmtree(oldest.dir, ignore_errors=True)
+
+
 def janitor():
     """Delete jobs (and their files) JOB_TTL seconds after they finish.
     Running and queued jobs are never touched, however long they take."""
@@ -429,6 +460,7 @@ def janitor():
             for d in JOBS_DIR.iterdir():
                 if d.name not in jobs and d.stat().st_mtime < cutoff:
                     shutil.rmtree(d, ignore_errors=True)
+        make_room()
 
 
 threading.Thread(target=janitor, daemon=True).start()
@@ -573,6 +605,9 @@ def create_job():
         if not url:
             return jsonify(error="This link is a whole playlist. Turn on "
                                  "\"Download whole playlist\" to get it as a .zip."), 400
+    make_room()
+    if free_bytes() < MIN_FREE:
+        return jsonify(error=DISK_FULL_MSG), 507
     job = Job(url, quality, container, playlist)
     with jobs_lock:
         jobs[job.id] = job
