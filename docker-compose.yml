@@ -8,7 +8,7 @@ services:
       - "127.0.0.1:8088:8000"
     environment:
       MAX_CONCURRENT: "2"       # downloads running at the same time
-      JOB_TTL_MINUTES: "60"     # finished files are deleted after this
+      JOB_TTL_MINUTES: "5"      # finished files are deleted after this
       MIN_FREE_GB: "5"          # keep this much disk free (old files deleted early)
       MAX_HEIGHT: "2160"        # cap resolution (e.g. 1080 to save disk/bandwidth)
       CONCURRENT_FRAGMENTS: "8" # parallel connections per download (1 = off)
