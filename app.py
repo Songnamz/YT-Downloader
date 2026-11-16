@@ -430,12 +430,17 @@ CONVERT_TO.update({ext: "mp4" for ext in
 # Formats the user can ask for directly: MP3 and WAV keep just the sound,
 # AVI, AMV and MKV keep the picture too (or make one, for sound-only files)
 OUTPUTS = ("mp3", "wav", "avi", "amv", "mkv")
-# Extra AVI sizes for small screens: "avi160" is an AVI fitted into 128×160
-AVI_SCREENS = {"avi160": (128, 160)}
-# AMV is for small MP3/MP4 players: always this size and frame rate. The
+# "avi160" is an AVI for small 1.8" MP3/MP4 players with a 128×160 screen
+# (the kind that says "AVI 128*160"): MJPEG at 16 fps with 16-bit stereo
+# sound at 22 kHz. They hold the screen sideways, so the picture is made
+# 160×128 and stored turned a quarter turn. These exact settings play on a
+# real player; Xvid, and MJPEG at 20 fps with mono sound, did not.
+SMALL_AVI = {"avi160": (160, 128)}
+SMALL_AVI_FPS = 16
+# AMV is for small players with an Actions chip: 160×128 at 14 fps. The
 # muxer needs exactly one block of sound per picture, so the rate must divide
-# 22050 Hz evenly (15 fps -> 1470 samples a block).
-AMV_SCREEN, AMV_FPS, AMV_RATE = (128, 160), 15, 22050
+# 22050 Hz evenly (14 fps -> 1575 samples a block).
+AMV_SCREEN, AMV_FPS, AMV_RATE = (160, 128), 14, 22050
 # Outputs that are videos, so a file with a picture but no sound is fine
 VIDEO_OUTPUTS = ("avi", "amv", "mkv")
 # The browser sends the file in pieces of this size. Cloudflare refuses
@@ -481,7 +486,7 @@ class ConvertJob(Job):
     def __init__(self, name, size, target, screen=None):
         super().__init__("", None, target, False)
         self.size = size
-        self.screen = screen       # (width, height) to fit an AVI into, or None
+        self.screen = screen       # (width, height) for a small-player AVI, or None
         self.received = 0
         self.touched = time.time()
         self.upload_lock = threading.Lock()
@@ -579,10 +584,9 @@ class ConvertJob(Job):
         """MPEG-4 (Xvid) video with MP3 sound: the AVI most players and TVs read.
         A file with no picture gets a still one, like MP4."""
         if self.screen:
-            scale = ["-vf", fit_filter(self.screen, "yuv420p")]
-        else:
-            # Even width and height, at most 1920 wide
-            scale = ["-vf", "scale='min(1920,trunc(iw/2)*2)':-2,format=yuv420p"]
+            return self.small_avi_command(streams, duration)
+        # Even width and height, at most 1920 wide
+        scale = ["-vf", "scale='min(1920,trunc(iw/2)*2)':-2,format=yuv420p"]
         codecs = ["-c:v", "mpeg4", "-vtag", "XVID", "-q:v", "3",
                   "-c:a", "libmp3lame", "-q:a", "2"]
         video = next((s for s in streams if s.get("codec_type") == "video"
@@ -597,14 +601,28 @@ class ConvertJob(Job):
             cmd += ["-t", f"{duration:.3f}"]
         return cmd
 
+    def small_avi_command(self, streams, duration):
+        """MJPEG AVI for small players (see SMALL_AVI), fitted into the screen
+        and turned a quarter turn the way the player shows it."""
+        vf = (f"fps={SMALL_AVI_FPS}," + fit_filter(self.screen, "yuvj420p")
+              + ",transpose=2,vflip")
+        codecs = ["-r", str(SMALL_AVI_FPS), "-c:v", "mjpeg", "-q:v", "2",
+                  "-c:a", "pcm_s16le", "-ar", "22050", "-ac", "2"]
+        return self.small_player_command(streams, duration, vf, codecs, 2)
+
     def amv_command(self, streams, duration):
         """AMV (the MJPEG-like video and ADPCM sound that small MP3/MP4 players
-        play), fitted into AMV_SCREEN at AMV_FPS. AMV must have sound, so a
-        silent video gets a silent track; a file with no picture gets a still one."""
-        vf = ["-vf", f"fps={AMV_FPS}," + fit_filter(AMV_SCREEN, "yuvj420p")]
+        play), fitted into AMV_SCREEN at AMV_FPS."""
+        vf = f"fps={AMV_FPS}," + fit_filter(AMV_SCREEN, "yuvj420p")
         codecs = ["-r", str(AMV_FPS), "-c:v", "amv", "-q:v", "3",
                   "-c:a", "adpcm_ima_amv", "-ar", str(AMV_RATE), "-ac", "1",
                   "-block_size", str(AMV_RATE // AMV_FPS)]
+        return self.small_player_command(streams, duration, vf, codecs, 1)
+
+    def small_player_command(self, streams, duration, vf, codecs, channels):
+        """Small players want a sound track in every video, so a silent video
+        gets a silent one; a file with no picture gets a still one."""
+        vf = ["-vf", vf]
         video = next((s for s in streams if s.get("codec_type") == "video"
                       and not s.get("disposition", {}).get("attached_pic")), None)
         has_audio = any(s.get("codec_type") == "audio" for s in streams)
@@ -613,7 +631,8 @@ class ConvertJob(Job):
                     *vf, *codecs]
         if video is not None:
             cmd = ["-i", str(self.src),
-                   "-f", "lavfi", "-i", f"anullsrc=r={AMV_RATE}:cl=mono",
+                   "-f", "lavfi", "-i",
+                   f"anullsrc=r=22050:cl={'stereo' if channels == 2 else 'mono'}",
                    "-map", f"0:{video['index']}", "-map", "1:a"]
         else:
             cmd = self.still_input(streams) + [
@@ -957,8 +976,8 @@ def convert_create():
     """Start an upload: {name, size, to?} -> job id and the piece size to use.
     `to` is "mp3" or "wav" to take the sound out of any file, or "avi" or
     "mkv" for a video (sound-only files get a still picture), "avi160" for
-    an AVI fitted into a 128×160 screen, or "amv" for small MP3/MP4
-    players (also 128×160); anything else
+    an MJPEG AVI for small 128×160 players, or "amv" for small players
+    with an Actions chip; anything else
     (or nothing) picks the output from the file itself."""
     data = request.get_json(silent=True) or {}
     # Just the file name, never a path
@@ -966,7 +985,7 @@ def convert_create():
     size = data.get("size")
     # Every file type is accepted; unknown ones are sorted out after upload
     target = CONVERT_TO.get(Path(name).suffix.lower(), "auto")
-    screen = AVI_SCREENS.get(data.get("to"))
+    screen = SMALL_AVI.get(data.get("to"))
     if data.get("to") in OUTPUTS:
         target = data["to"]
     elif screen:

@@ -61,10 +61,11 @@ MOV/MKV/WEBM videos also become MP3, and M4A/WAV/FLAC/OGG audio becomes MP4.
 That's the **Auto** choice; set **Convert to** to **MP3** or **WAV** to get just
 the sound of any file in that format (WAV is 16-bit PCM, RF64 past 4 GB), or to
 **AVI** to get a video (MPEG-4/Xvid with MP3 sound; sound-only files get the
-cover picture or a black screen, as with MP4; **AVI 128×160** makes the same
-AVI fitted into 128×160 with black bars, for small MP4/MP3 player screens), or to
-**AMV** for small MP3/MP4 players (128×160 at 15 fps, ADPCM mono sound at 22 kHz;
-same black bars and still picture), or to **MKV** to get a video
+cover picture or a black screen, as with MP4; **AVI 128×160** is for small 1.8" MP3/MP4
+players whose box says "AVI 128*160": MJPEG at 16 fps with 16-bit stereo PCM
+sound at 22 kHz, fitted with black bars and stored sideways as those players
+expect), or to **AMV** for small players with an Actions chip (160×128 at
+14 fps, ADPCM mono sound at 22 kHz), or to **MKV** to get a video
 with the picture and every sound track copied as they are (no quality loss;
 anything MKV can't hold is converted to H.264/AAC instead).
 Any other file type is accepted too (AVI, WMV, FLV, 3GP, TS, AMR, …, even no
