@@ -428,8 +428,10 @@ CONVERT_TO = {ext: "mp3" for ext in (".mp4", ".m4v", ".mov", ".mkv", ".webm")}
 CONVERT_TO.update({ext: "mp4" for ext in
                    (".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".opus")})
 # Formats the user can ask for directly: MP3 and WAV keep just the sound,
-# AVI keeps the picture too (or makes one, for sound-only files)
-OUTPUTS = ("mp3", "wav", "avi")
+# AVI and MKV keep the picture too (or make one, for sound-only files)
+OUTPUTS = ("mp3", "wav", "avi", "mkv")
+# Outputs that are videos, so a file with a picture but no sound is fine
+VIDEO_OUTPUTS = ("avi", "mkv")
 # The browser sends the file in pieces of this size. Cloudflare refuses
 # request bodies over 100 MB, so each piece stays well under that.
 UPLOAD_CHUNK = 32 * 1024 ** 2
@@ -577,6 +579,27 @@ class ConvertJob(Job):
             cmd += ["-t", f"{duration:.3f}"]
         return cmd
 
+    def mkv_command(self, streams, duration, copy=True):
+        """MKV takes almost any codec, so the first try copies the streams as
+        they are: no quality loss, and done in seconds. If that fails (`copy`
+        False), it's H.264 with AAC sound. Every sound track is kept.
+        A file with no picture gets a still one, like MP4."""
+        video = next((s for s in streams if s.get("codec_type") == "video"
+                      and not s.get("disposition", {}).get("attached_pic")), None)
+        h264 = ["-vf", "scale='min(1920,trunc(iw/2)*2)':-2,format=yuv420p",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "20"]
+        audio = ["-c:a", "copy"] if copy else ["-c:a", "aac", "-b:a", "192k"]
+        if video is not None:
+            return ["-i", str(self.src), "-map", f"0:{video['index']}", "-map", "0:a?",
+                    "-map_metadata", "0",
+                    *(["-c:v", "copy"] if copy else h264), *audio]
+        cmd = self.still_input(streams) + [
+            "-i", str(self.src), "-map", "0:v:0", "-map", "1:a", "-map_metadata", "1",
+            *h264, "-tune", "stillimage", "-r", "1", *audio, "-shortest"]
+        if duration:
+            cmd += ["-t", f"{duration:.3f}"]
+        return cmd
+
     def run_ffmpeg(self, args, duration):
         cmd = ["ffmpeg", "-nostdin", "-hide_banner", "-y", "-loglevel", "error",
                "-progress", "pipe:1", "-nostats", *args, str(self.dest)]
@@ -617,8 +640,8 @@ class ConvertJob(Job):
                             and not s.get("disposition", {}).get("attached_pic")
                             for s in streams)
             has_audio = any(s.get("codec_type") == "audio" for s in streams)
-            # AVI can carry a silent video; every other output needs the sound
-            if not has_audio and not (self.container == "avi" and has_video):
+            # AVI and MKV can carry a silent video; the others need the sound
+            if not has_audio and not (self.container in VIDEO_OUTPUTS and has_video):
                 return self.fail("This file has no sound to convert.")
             try:
                 duration = float(info["format"].get("duration") or 0)
@@ -631,8 +654,14 @@ class ConvertJob(Job):
             args = (self.mp3_command() if self.container == "mp3"
                     else self.wav_command() if self.container == "wav"
                     else self.avi_command(streams, duration) if self.container == "avi"
+                    else self.mkv_command(streams, duration) if self.container == "mkv"
                     else self.mp4_command(streams, duration))
             code, last_error = self.run_ffmpeg(args, duration)
+            if self.container == "mkv" and code != 0 and not self.cancelled:
+                # Copying didn't work (an odd codec): convert it instead
+                self.log(f"Copying failed ({last_error}); converting instead")
+                code, last_error = self.run_ffmpeg(
+                    self.mkv_command(streams, duration, copy=False), duration)
         if self.cancelled:
             self.update(status="cancelled", stage="Cancelled")
             return
@@ -881,8 +910,8 @@ def job_file(job_id):
 @app.post("/api/convert")
 def convert_create():
     """Start an upload: {name, size, to?} -> job id and the piece size to use.
-    `to` is "mp3" or "wav" to take the sound out of any file, or "avi" for a
-    video (sound-only files get a still picture); anything else
+    `to` is "mp3" or "wav" to take the sound out of any file, or "avi" or
+    "mkv" for a video (sound-only files get a still picture); anything else
     (or nothing) picks the output from the file itself."""
     data = request.get_json(silent=True) or {}
     # Just the file name, never a path
