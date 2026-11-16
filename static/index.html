@@ -285,7 +285,7 @@
       <div class="opts" style="margin-top:14px">
         <div class="field">
           <label>Convert to</label>
-          <div class="seg" id="convFmt"><button type="button" data-v="auto" title="Video becomes MP3, audio becomes MP4">Auto</button><button type="button" data-v="mp3" title="The sound only, as MP3">MP3</button><button type="button" data-v="wav" title="The sound only, as uncompressed WAV">WAV</button><button type="button" data-v="avi" title="A video in AVI (Xvid + MP3); sound-only files get a still picture">AVI</button><button type="button" data-v="mkv" title="A video in MKV, keeping the original quality and every sound track">MKV</button></div>
+          <div class="seg" id="convFmt"><button type="button" data-v="auto" title="Video becomes MP3, audio becomes MP4">Auto</button><button type="button" data-v="mp3" title="The sound only, as MP3">MP3</button><button type="button" data-v="wav" title="The sound only, as uncompressed WAV">WAV</button><button type="button" data-v="avi" title="A video in AVI (Xvid + MP3); sound-only files get a still picture">AVI</button><button type="button" data-v="avi160" title="An AVI sized 128×160 for small MP4/MP3 player screens (black bars keep the shape)">AVI 128×160</button><button type="button" data-v="amv" title="AMV video for small MP3/MP4 players, 128×160 at 15 frames a second">AMV</button><button type="button" data-v="mkv" title="A video in MKV, keeping the original quality and every sound track">MKV</button></div>
         </div>
       </div>
       <label class="switch"><input type="checkbox" id="autoSave" checked> Save each file as soon as it's converted</label>
@@ -371,7 +371,8 @@
     <p><b>MP3 → MP4</b>: makes a video of the sound with the song's cover picture, or a black screen if it has none. Handy for apps that only accept videos.</p>
     <p>Other files work too: MOV, MKV and WEBM videos become MP3; M4A, WAV, FLAC and OGG audio become MP4.</p>
     <p>Pick <b>MP3</b> or <b>WAV</b> under <i>Convert to</i> to take the sound out of any file instead (a video, or audio in another format). WAV is uncompressed, so it's about 10 MB per minute.</p>
-    <p>Pick <b>AVI</b> to turn a video (MP4, MOV, MKV, …) into an AVI for older players and TVs. It uses Xvid video with MP3 sound; audio files get the cover picture or a black screen, like MP4.</p>
+    <p>Pick <b>AVI</b> to turn a video (MP4, MOV, MKV, …) into an AVI for older players and TVs. It uses Xvid video with MP3 sound; audio files get the cover picture or a black screen, like MP4. Pick <b>AVI 128×160</b> for small MP4/MP3 players with a 128×160 screen: the picture is shrunk to fit, with black bars so it isn't stretched.</p>
+    <p>Pick <b>AMV</b> if your MP3/MP4 player plays AMV videos (most small ones with a screen do). It's 128×160 at 15 frames a second, with black bars like AVI 128×160; videos without sound get a silent track, since AMV must have one.</p>
     <p>Pick <b>MKV</b> to put a video into an MKV file. The picture and every sound track are copied as they are, so there's no quality loss and it's quick. Audio files get the cover picture or a black screen.</p>
     <p>There's no limit on size or on the number of files. Pick or drop as many as you like; they're converted one after another, and you can add more while it runs. Keep this tab open until the last file has finished uploading.</p>
     <p>Each converted file is saved automatically as soon as it's ready (your browser may ask once to allow several downloads). To get everything in one go instead, turn that off and press <b>Download all as zip</b> when the batch is done.</p>
@@ -634,11 +635,13 @@ function renderSummary() {
   $("zipAll").textContent = ready > 1 ? `Download all ${ready} as zip` : "Download as zip";
   if (!job && !batch) setBusy(false);
 }
-// Output format: "auto" (video -> MP3, audio -> MP4), "mp3", "wav", "avi" or "mkv"
+// Output format: "auto" (video -> MP3, audio -> MP4), "mp3", "wav", "avi",
+// "avi160" (AVI at 128×160), "amv" or "mkv"
 let convFmt = store.get("convFmt", "auto");
-if (!["auto", "mp3", "wav", "avi", "mkv"].includes(convFmt)) convFmt = "auto";
+if (!["auto", "mp3", "wav", "avi", "avi160", "amv", "mkv"].includes(convFmt)) convFmt = "auto";
 function targetOf(f) {
-  return convFmt !== "auto" ? convFmt.toUpperCase()
+  return convFmt === "avi160" ? "AVI 128×160"
+       : convFmt !== "auto" ? convFmt.toUpperCase()
        : (CONVERT_TO[ext(f.name)] || "").toUpperCase() || "MP3 or MP4 (detected)";
 }
 function showTarget(q) {

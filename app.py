@@ -428,10 +428,16 @@ CONVERT_TO = {ext: "mp3" for ext in (".mp4", ".m4v", ".mov", ".mkv", ".webm")}
 CONVERT_TO.update({ext: "mp4" for ext in
                    (".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".opus")})
 # Formats the user can ask for directly: MP3 and WAV keep just the sound,
-# AVI and MKV keep the picture too (or make one, for sound-only files)
-OUTPUTS = ("mp3", "wav", "avi", "mkv")
+# AVI, AMV and MKV keep the picture too (or make one, for sound-only files)
+OUTPUTS = ("mp3", "wav", "avi", "amv", "mkv")
+# Extra AVI sizes for small screens: "avi160" is an AVI fitted into 128×160
+AVI_SCREENS = {"avi160": (128, 160)}
+# AMV is for small MP3/MP4 players: always this size and frame rate. The
+# muxer needs exactly one block of sound per picture, so the rate must divide
+# 22050 Hz evenly (15 fps -> 1470 samples a block).
+AMV_SCREEN, AMV_FPS, AMV_RATE = (128, 160), 15, 22050
 # Outputs that are videos, so a file with a picture but no sound is fine
-VIDEO_OUTPUTS = ("avi", "mkv")
+VIDEO_OUTPUTS = ("avi", "amv", "mkv")
 # The browser sends the file in pieces of this size. Cloudflare refuses
 # request bodies over 100 MB, so each piece stays well under that.
 UPLOAD_CHUNK = 32 * 1024 ** 2
@@ -463,10 +469,19 @@ def clock(seconds: float) -> str:
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
 
 
+def fit_filter(screen, pix_fmt) -> str:
+    """Shrink the picture to fit `screen` (width, height) whole, with black
+    bars filling the rest so nothing is stretched or cut off."""
+    w, h = screen
+    return (f"scale={w}:{h}:force_original_aspect_ratio=decrease:force_divisible_by=2,"
+            f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,format={pix_fmt}")
+
+
 class ConvertJob(Job):
-    def __init__(self, name, size, target):
+    def __init__(self, name, size, target, screen=None):
         super().__init__("", None, target, False)
         self.size = size
+        self.screen = screen       # (width, height) to fit an AVI into, or None
         self.received = 0
         self.touched = time.time()
         self.upload_lock = threading.Lock()
@@ -563,8 +578,11 @@ class ConvertJob(Job):
     def avi_command(self, streams, duration):
         """MPEG-4 (Xvid) video with MP3 sound: the AVI most players and TVs read.
         A file with no picture gets a still one, like MP4."""
-        # Even width and height, at most 1920 wide
-        scale = ["-vf", "scale='min(1920,trunc(iw/2)*2)':-2,format=yuv420p"]
+        if self.screen:
+            scale = ["-vf", fit_filter(self.screen, "yuv420p")]
+        else:
+            # Even width and height, at most 1920 wide
+            scale = ["-vf", "scale='min(1920,trunc(iw/2)*2)':-2,format=yuv420p"]
         codecs = ["-c:v", "mpeg4", "-vtag", "XVID", "-q:v", "3",
                   "-c:a", "libmp3lame", "-q:a", "2"]
         video = next((s for s in streams if s.get("codec_type") == "video"
@@ -575,6 +593,32 @@ class ConvertJob(Job):
         cmd = self.still_input(streams) + [
             "-i", str(self.src), "-map", "0:v:0", "-map", "1:a:0", "-map_metadata", "1",
             *scale, "-r", "1", *codecs, "-shortest"]
+        if duration:
+            cmd += ["-t", f"{duration:.3f}"]
+        return cmd
+
+    def amv_command(self, streams, duration):
+        """AMV (the MJPEG-like video and ADPCM sound that small MP3/MP4 players
+        play), fitted into AMV_SCREEN at AMV_FPS. AMV must have sound, so a
+        silent video gets a silent track; a file with no picture gets a still one."""
+        vf = ["-vf", f"fps={AMV_FPS}," + fit_filter(AMV_SCREEN, "yuvj420p")]
+        codecs = ["-r", str(AMV_FPS), "-c:v", "amv", "-q:v", "3",
+                  "-c:a", "adpcm_ima_amv", "-ar", str(AMV_RATE), "-ac", "1",
+                  "-block_size", str(AMV_RATE // AMV_FPS)]
+        video = next((s for s in streams if s.get("codec_type") == "video"
+                      and not s.get("disposition", {}).get("attached_pic")), None)
+        has_audio = any(s.get("codec_type") == "audio" for s in streams)
+        if video is not None and has_audio:
+            return ["-i", str(self.src), "-map", f"0:{video['index']}", "-map", "0:a:0",
+                    *vf, *codecs]
+        if video is not None:
+            cmd = ["-i", str(self.src),
+                   "-f", "lavfi", "-i", f"anullsrc=r={AMV_RATE}:cl=mono",
+                   "-map", f"0:{video['index']}", "-map", "1:a"]
+        else:
+            cmd = self.still_input(streams) + [
+                "-i", str(self.src), "-map", "0:v:0", "-map", "1:a:0"]
+        cmd += [*vf, *codecs, "-shortest"]
         if duration:
             cmd += ["-t", f"{duration:.3f}"]
         return cmd
@@ -640,7 +684,7 @@ class ConvertJob(Job):
                             and not s.get("disposition", {}).get("attached_pic")
                             for s in streams)
             has_audio = any(s.get("codec_type") == "audio" for s in streams)
-            # AVI and MKV can carry a silent video; the others need the sound
+            # AVI, AMV and MKV can carry a silent video; the others need the sound
             if not has_audio and not (self.container in VIDEO_OUTPUTS and has_video):
                 return self.fail("This file has no sound to convert.")
             try:
@@ -654,6 +698,7 @@ class ConvertJob(Job):
             args = (self.mp3_command() if self.container == "mp3"
                     else self.wav_command() if self.container == "wav"
                     else self.avi_command(streams, duration) if self.container == "avi"
+                    else self.amv_command(streams, duration) if self.container == "amv"
                     else self.mkv_command(streams, duration) if self.container == "mkv"
                     else self.mp4_command(streams, duration))
             code, last_error = self.run_ffmpeg(args, duration)
@@ -911,7 +956,9 @@ def job_file(job_id):
 def convert_create():
     """Start an upload: {name, size, to?} -> job id and the piece size to use.
     `to` is "mp3" or "wav" to take the sound out of any file, or "avi" or
-    "mkv" for a video (sound-only files get a still picture); anything else
+    "mkv" for a video (sound-only files get a still picture), "avi160" for
+    an AVI fitted into a 128×160 screen, or "amv" for small MP3/MP4
+    players (also 128×160); anything else
     (or nothing) picks the output from the file itself."""
     data = request.get_json(silent=True) or {}
     # Just the file name, never a path
@@ -919,15 +966,18 @@ def convert_create():
     size = data.get("size")
     # Every file type is accepted; unknown ones are sorted out after upload
     target = CONVERT_TO.get(Path(name).suffix.lower(), "auto")
+    screen = AVI_SCREENS.get(data.get("to"))
     if data.get("to") in OUTPUTS:
         target = data["to"]
+    elif screen:
+        target = "avi"
     if type(size) is not int or size <= 0:
         return jsonify(error="This file is empty."), 400
     make_room()
     if free_bytes() - size < MIN_FREE:
         return jsonify(error="The server doesn't have enough free disk space for "
                              "this file right now. Try again later."), 507
-    job = ConvertJob(name, size, target)
+    job = ConvertJob(name, size, target, screen)
     with jobs_lock:
         jobs[job.id] = job
     return jsonify(job.public() | {"chunk": UPLOAD_CHUNK}), 201
