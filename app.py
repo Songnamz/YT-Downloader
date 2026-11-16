@@ -427,8 +427,9 @@ class Job:
 CONVERT_TO = {ext: "mp3" for ext in (".mp4", ".m4v", ".mov", ".mkv", ".webm")}
 CONVERT_TO.update({ext: "mp4" for ext in
                    (".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".opus")})
-# Formats the user can ask for directly; both just keep the sound
-OUTPUTS = ("mp3", "wav")
+# Formats the user can ask for directly: MP3 and WAV keep just the sound,
+# AVI keeps the picture too (or makes one, for sound-only files)
+OUTPUTS = ("mp3", "wav", "avi")
 # The browser sends the file in pieces of this size. Cloudflare refuses
 # request bodies over 100 MB, so each piece stays well under that.
 UPLOAD_CHUNK = 32 * 1024 ** 2
@@ -531,8 +532,8 @@ class ConvertJob(Job):
         return ["-i", str(self.src), "-map", "0:a:0", "-vn", "-map_metadata", "0",
                 "-c:a", "pcm_s16le", "-rf64", "auto"]
 
-    def mp4_command(self, streams, duration):
-        """A still picture (the file's cover art, or black) with the sound."""
+    def still_input(self, streams):
+        """ffmpeg input args for a still picture: the cover art, or black."""
         picture = None
         cover = next((s for s in streams if s.get("codec_type") == "video"
                       and s.get("disposition", {}).get("attached_pic")), None)
@@ -542,14 +543,36 @@ class ConvertJob(Job):
                             "-map", f"0:{cover['index']}", "-frames:v", "1", str(png)],
                            capture_output=True, timeout=120)
             picture = png if png.is_file() else None
-        video_in = (["-loop", "1", "-framerate", "1", "-i", str(picture)] if picture
-                    else ["-f", "lavfi", "-i", "color=c=black:s=1280x720:r=1"])
-        cmd = video_in + [
+        return (["-loop", "1", "-framerate", "1", "-i", str(picture)] if picture
+                else ["-f", "lavfi", "-i", "color=c=black:s=1280x720:r=1"])
+
+    def mp4_command(self, streams, duration):
+        """A still picture (the file's cover art, or black) with the sound."""
+        cmd = self.still_input(streams) + [
             "-i", str(self.src), "-map", "0:v:0", "-map", "1:a:0", "-map_metadata", "1",
             # Even width and height (needed by H.264), at most 1920 wide
             "-vf", "scale='min(1920,trunc(iw/2)*2)':-2,format=yuv420p",
             "-c:v", "libx264", "-preset", "veryfast", "-tune", "stillimage", "-r", "1",
             "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart"]
+        if duration:
+            cmd += ["-t", f"{duration:.3f}"]
+        return cmd
+
+    def avi_command(self, streams, duration):
+        """MPEG-4 (Xvid) video with MP3 sound: the AVI most players and TVs read.
+        A file with no picture gets a still one, like MP4."""
+        # Even width and height, at most 1920 wide
+        scale = ["-vf", "scale='min(1920,trunc(iw/2)*2)':-2,format=yuv420p"]
+        codecs = ["-c:v", "mpeg4", "-vtag", "XVID", "-q:v", "3",
+                  "-c:a", "libmp3lame", "-q:a", "2"]
+        video = next((s for s in streams if s.get("codec_type") == "video"
+                      and not s.get("disposition", {}).get("attached_pic")), None)
+        if video is not None:
+            return ["-i", str(self.src), "-map", f"0:{video['index']}", "-map", "0:a:0?",
+                    "-map_metadata", "0", *scale, *codecs]
+        cmd = self.still_input(streams) + [
+            "-i", str(self.src), "-map", "0:v:0", "-map", "1:a:0", "-map_metadata", "1",
+            *scale, "-r", "1", *codecs, "-shortest"]
         if duration:
             cmd += ["-t", f"{duration:.3f}"]
         return cmd
@@ -590,21 +613,24 @@ class ConvertJob(Job):
             streams = info.get("streams", [])
             if not info.get("format"):
                 return self.fail("This file can't be read. Is it really a video or audio file?")
-            if not any(s.get("codec_type") == "audio" for s in streams):
+            has_video = any(s.get("codec_type") == "video"
+                            and not s.get("disposition", {}).get("attached_pic")
+                            for s in streams)
+            has_audio = any(s.get("codec_type") == "audio" for s in streams)
+            # AVI can carry a silent video; every other output needs the sound
+            if not has_audio and not (self.container == "avi" and has_video):
                 return self.fail("This file has no sound to convert.")
             try:
                 duration = float(info["format"].get("duration") or 0)
             except ValueError:
                 duration = 0.0
             if self.container == "auto":
-                has_picture = any(s.get("codec_type") == "video"
-                                  and not s.get("disposition", {}).get("attached_pic")
-                                  for s in streams)
-                self.container = "mp3" if has_picture else "mp4"
+                self.container = "mp3" if has_video else "mp4"
                 self.dest = self.out / f"{self.stem}.{self.container}"
             self.update(stage="Converting…")
             args = (self.mp3_command() if self.container == "mp3"
                     else self.wav_command() if self.container == "wav"
+                    else self.avi_command(streams, duration) if self.container == "avi"
                     else self.mp4_command(streams, duration))
             code, last_error = self.run_ffmpeg(args, duration)
         if self.cancelled:
@@ -855,7 +881,8 @@ def job_file(job_id):
 @app.post("/api/convert")
 def convert_create():
     """Start an upload: {name, size, to?} -> job id and the piece size to use.
-    `to` is "mp3" or "wav" to take the sound out of any file; anything else
+    `to` is "mp3" or "wav" to take the sound out of any file, or "avi" for a
+    video (sound-only files get a still picture); anything else
     (or nothing) picks the output from the file itself."""
     data = request.get_json(silent=True) or {}
     # Just the file name, never a path
